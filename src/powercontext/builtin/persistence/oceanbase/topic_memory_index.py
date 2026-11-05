@@ -154,6 +154,15 @@ class OceanBaseTopicMemoryFTSIndex:
             .limit(1)
         )
 
+    async def delete(
+        self,
+        _connection: AsyncConnection,
+        _scope_id: str,
+        _topic_ref: ArtifactRef,
+        /,
+    ) -> None:
+        pass
+
     async def replace(
         self,
         _connection: AsyncConnection,
@@ -393,6 +402,26 @@ class OceanBaseTopicMemoryVectorIndex:
 
     async def validate_current(self, connection: AsyncConnection, /) -> None:
         await validate_current_topic_vectors(connection, self.topic_table, self.chunk_table, self._fingerprint)
+
+    async def delete(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        topic_ref: ArtifactRef,
+        /,
+    ) -> None:
+        await connection.execute(
+            delete(self.chunk_table).where(
+                self.chunk_table.c.scope_id == scope_id,
+                self.chunk_table.c.artifact_id == topic_ref.artifact_id,
+            )
+        )
+        await connection.execute(
+            delete(self.topic_table).where(
+                self.topic_table.c.scope_id == scope_id,
+                self.topic_table.c.artifact_id == topic_ref.artifact_id,
+            )
+        )
 
     async def replace(
         self,

@@ -249,6 +249,26 @@ from powercontext.builtin.runtime.recall_sufficiency import (
     build_recall_candidates,
     recall_effort,
 )
+from sqlalchemy import delete, insert, select
+from powercontext.builtin.runtime.source_lifecycle import (
+    MEMORY_KIND,
+    SOURCE_KIND,
+    TOPIC_KIND,
+    LifecycleNode,
+    SourceLifecycleError,
+    SourceLifecycleEvent,
+    _available_nodes,
+    _load_state,
+    _node_id,
+    _parents,
+    _policy,
+    _recompute,
+    _require_known_parents,
+    _require_source,
+    _supported,
+    _save_event,
+    _save_node,
+)
 from powercontext.builtin.runtime.statistics import RelationalScopedStatistics, overview_selection
 from powercontext.builtin.scope import ScopeApplication, ScopeDescriptor, ScopeSelection
 from powercontext.builtin.scope.subject_sources import SubjectSourceService
@@ -2623,6 +2643,351 @@ class ScopedMemoryApplication:
             return await context.triggers.cursor()
 
 
+class ScopedSourceLifecycleApplication:
+    """Register dependency nodes and propagate Source availability inside one Scope."""
+
+    def __init__(self, runtime: BuiltinRuntime, scope_id: str) -> None:
+        self._runtime = runtime
+        self.scope_id = validate_scope_id(scope_id)
+
+    async def register_source(
+        self,
+        node_id: str,
+        source_ref: SourceRef,
+        *,
+        revision: int,
+    ) -> None:
+        """Register one captured Source as the root of a dependency branch."""
+
+        identity = _node_id(node_id)
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise SourceLifecycleError("revision must be a positive integer")
+        reference = {"source_type": source_ref.source_type, "source_id": source_ref.source_id}
+        async with self._runtime._context(self.scope_id) as context:
+            async with self._database().transaction() as connection:
+                await _require_source(connection, self.scope_id, source_ref)
+                state = await _load_state(connection, self.scope_id)
+            existing = state.nodes.get(identity)
+            if existing is not None:
+                if (
+                    existing.kind != SOURCE_KIND
+                    or existing.revision != revision
+                    or existing.reference != reference
+                ):
+                    raise SourceLifecycleError("the node is already registered with another binding")
+                return
+            node = LifecycleNode(
+                node_id=identity,
+                kind=SOURCE_KIND,
+                parents=(),
+                policy="all",
+                revision=revision,
+                reference=reference,
+                available=True,
+            )
+            state.nodes[identity] = node
+            async with self._database().transaction() as connection:
+                await _save_node(connection, self.scope_id, node)
+
+    async def register_memory(
+        self,
+        node_id: str,
+        citation: MemoryCitation,
+        *,
+        parents: tuple[str, ...],
+        policy: str,
+    ) -> None:
+        """Bind one Memory entry to the Sources and Memory entries it depends on."""
+
+        identity = _node_id(node_id)
+        dependencies = _parents(parents)
+        rule = _policy(policy)
+        reference = {
+            "memory_ref": citation.memory_ref.model_dump(mode="json"),
+            "entry_id": citation.entry_id,
+            "entry_version_id": citation.entry_version_id,
+        }
+        async with self._runtime._context(self.scope_id) as context:
+            await self._require_memory(context, citation)
+            async with self._database().transaction() as connection:
+                state = await _load_state(connection, self.scope_id)
+            existing = state.nodes.get(identity)
+            if existing is not None:
+                if (
+                    existing.kind != MEMORY_KIND
+                    or existing.parents != dependencies
+                    or existing.policy != rule
+                    or existing.reference != reference
+                ):
+                    raise SourceLifecycleError("the node is already registered with another binding")
+                return
+            _require_known_parents(state, dependencies, identity)
+            available = _supported(state, dependencies, rule)
+            node = LifecycleNode(
+                node_id=identity,
+                kind=MEMORY_KIND,
+                parents=dependencies,
+                policy=rule,
+                revision=None,
+                reference=reference,
+                available=available,
+            )
+            state.nodes[identity] = node
+            await self._sync_memory(context, (node,))
+            async with self._database().transaction() as connection:
+                await _save_node(connection, self.scope_id, node)
+
+    async def register_topic(
+        self,
+        node_id: str,
+        artifact_ref: ArtifactRef,
+        *,
+        parents: tuple[str, ...],
+        policy: str,
+    ) -> None:
+        """Bind one Topic Memory artifact to the nodes it depends on."""
+
+        identity = _node_id(node_id)
+        dependencies = _parents(parents)
+        rule = _policy(policy)
+        reference = {
+            "family": artifact_ref.family,
+            "artifact_id": artifact_ref.artifact_id,
+            "revision": artifact_ref.revision,
+        }
+        async with self._runtime._context(self.scope_id) as context:
+            await self._require_artifact(context, artifact_ref)
+            async with self._database().transaction() as connection:
+                state = await _load_state(connection, self.scope_id)
+            existing = state.nodes.get(identity)
+            if existing is not None:
+                if (
+                    existing.kind != TOPIC_KIND
+                    or existing.parents != dependencies
+                    or existing.policy != rule
+                    or existing.reference != reference
+                ):
+                    raise SourceLifecycleError("the node is already registered with another binding")
+                return
+            _require_known_parents(state, dependencies, identity)
+            available = _supported(state, dependencies, rule)
+            node = LifecycleNode(
+                node_id=identity,
+                kind=TOPIC_KIND,
+                parents=dependencies,
+                policy=rule,
+                revision=None,
+                reference=reference,
+                available=available,
+            )
+            state.nodes[identity] = node
+            await self._sync_topics(context, (node,))
+            async with self._database().transaction() as connection:
+                await _save_node(connection, self.scope_id, node)
+
+    async def apply(self, event: SourceLifecycleEvent) -> list[str]:
+        """Apply one Source availability event and return the available node identifiers."""
+
+        if not isinstance(event, SourceLifecycleEvent):
+            raise SourceLifecycleError("event must be a SourceLifecycleEvent")
+        async with self._runtime._context(self.scope_id) as context, self._runtime._locked(self.scope_id):
+            async with self._database().transaction() as connection:
+                state = await _load_state(connection, self.scope_id)
+            node = state.nodes.get(event.node_id)
+            if node is None or node.kind != SOURCE_KIND:
+                raise SourceLifecycleError("the event targets an unknown Source")
+            if node.revision != event.revision:
+                raise SourceLifecycleError("the event revision does not match the Source lifecycle")
+            applied = state.events.get(event.node_id, {})
+            previous = applied.get(event.sequence)
+            if previous is not None:
+                if previous.available != event.available or previous.reason != event.reason:
+                    raise SourceLifecycleError("the event sequence was already used")
+                return _available_nodes(state)
+            if applied and event.sequence <= max(applied):
+                raise SourceLifecycleError("the event sequence must increase")
+
+            state.events.setdefault(event.node_id, {})[event.sequence] = event
+            was = node.available
+            state.nodes[event.node_id] = LifecycleNode(
+                node_id=node.node_id,
+                kind=node.kind,
+                parents=node.parents,
+                policy=node.policy,
+                revision=node.revision,
+                reference=node.reference,
+                available=event.available,
+            )
+            changed = _recompute(state, {event.node_id})
+            updated = [state.nodes[name] for name in sorted(changed)]
+            if state.nodes[event.node_id].available != was:
+                updated.append(state.nodes[event.node_id])
+            await self._sync_memory(context, updated)
+            await self._sync_topics(context, updated)
+            async with self._database().transaction() as connection:
+                await _save_event(connection, self.scope_id, event)
+                for name in changed:
+                    await _save_node(connection, self.scope_id, state.nodes[name])
+                await _save_node(connection, self.scope_id, state.nodes[event.node_id])
+            return _available_nodes(state)
+
+    async def resolve(self, node_id: str, *, purpose: str):
+        """Return the exact reference of one node for the requested use."""
+
+        if purpose not in {"generation", "audit"}:
+            raise SourceLifecycleError("purpose must be 'generation' or 'audit'")
+        identity = _node_id(node_id)
+        async with self._runtime._context(self.scope_id) as context:
+            async with self._database().transaction() as connection:
+                state = await _load_state(connection, self.scope_id)
+        node = state.nodes.get(identity)
+        if node is None:
+            raise SourceLifecycleError("the node is unknown in this Scope")
+        if purpose == "generation" and not node.available:
+            raise SourceLifecycleError("the node has no usable support")
+        if node.kind == MEMORY_KIND:
+            return MemoryCitation(
+                memory_ref=ArtifactRef.model_validate(node.reference["memory_ref"]),
+                entry_id=node.reference["entry_id"],
+                entry_version_id=node.reference["entry_version_id"],
+            )
+        if node.kind == TOPIC_KIND:
+            return ArtifactRef.model_validate(node.reference)
+        return SourceRef.model_validate(node.reference)
+
+    def _database(self):
+        """Return the relational database this Runtime reads and writes."""
+
+        profiles = getattr(self._runtime, "profiles", None)
+        if profiles is not None:
+            return profiles.database
+        provider = getattr(self._runtime, "_provider", None)
+        database = getattr(provider, "database", None)
+        if database is None:
+            raise SourceLifecycleError("the runtime does not expose a relational database")
+        return database
+    async def _require_memory(self, context, citation: MemoryCitation) -> None:
+        try:
+            await context.artifacts.memory.validate_citation(citation)
+        except Exception as error:  # noqa: BLE001 - an unreadable citation is a contract failure
+            raise SourceLifecycleError("the registered Memory entry is not readable") from error
+
+    async def _require_artifact(self, context, artifact_ref: ArtifactRef) -> None:
+        from powercontext.builtin.persistence.tables import ARTIFACTS_TABLE
+
+        async with self._database().transaction() as connection:
+            found = await connection.scalar(
+                select(ARTIFACTS_TABLE.c.artifact_id).where(
+                    ARTIFACTS_TABLE.c.scope_id == self.scope_id,
+                    ARTIFACTS_TABLE.c.family == artifact_ref.family,
+                    ARTIFACTS_TABLE.c.artifact_id == artifact_ref.artifact_id,
+                    ARTIFACTS_TABLE.c.revision == artifact_ref.revision,
+                )
+            )
+        if found is None:
+            raise SourceLifecycleError("the registered Artifact revision is not readable")
+
+    async def _sync_memory(self, context, nodes) -> None:
+        """Match the native Memory state to the availability of the given nodes."""
+
+        entries = [node for node in nodes if node.kind == MEMORY_KIND]
+        if not entries:
+            return
+        service = context.artifacts.memory
+        current = await service.head(context.artifacts.memory_artifact_id)
+        for node in entries:
+            entry_id = node.reference.get("entry_id")
+            manifest = next(
+                (item for item in current.content.manifest.entries if item.entry_id == entry_id),
+                None,
+            )
+            if manifest is None:
+                continue
+            version = next(
+                (item for item in await service.entries(current) if item.entry_id == entry_id),
+                None,
+            )
+            if version is None:
+                continue
+            if not node.available and manifest.state == "active":
+                current = await service.forget(
+                    current,
+                    entries=[version],
+                    reason="source lifecycle withdrew the support",
+                )
+            elif node.available and manifest.state == "inactive":
+                current = await service.reactivate(
+                    current,
+                    entries=[version],
+                    reason="source lifecycle restored the support",
+                )
+
+    async def _sync_topics(self, context, nodes) -> None:
+        """Match the searchable Topic Memory index to the availability of the given nodes.
+
+        The stored Artifact revision stays published and readable; only the searchable
+        representation of a withdrawn topic leaves the index, so the Storage invariant that
+        every Artifact head owns an active projection keeps holding.
+        """
+
+        entries = [node for node in nodes if node.kind == TOPIC_KIND]
+        if not entries:
+            return
+        index = self._topic_index()
+        if index is None:
+            return
+        for node in entries:
+            artifact_ref = ArtifactRef.model_validate(node.reference)
+            if node.available:
+                projection = await self._topic_projection(context, artifact_ref)
+                if projection is None:
+                    continue
+                try:
+                    async with self._database().transaction() as connection:
+                        await index.replace(connection, self.scope_id, artifact_ref, projection)
+                except Exception:  # noqa: BLE001 - a vector index needs embeddings this path cannot rebuild
+                    pass
+                continue
+            async with self._database().transaction() as connection:
+                await index.delete(connection, self.scope_id, artifact_ref)
+
+    async def _topic_projection(self, context, artifact_ref: ArtifactRef):
+        """Rebuild the searchable projection of one stored Topic Memory artifact."""
+
+        from powercontext.builtin.artifacts.topic_memory.chunking import prepare_topic_memory_projection
+        from powercontext.builtin.artifacts.topic_memory.models import TopicMemoryContent
+        from powercontext.builtin.persistence.tables import ARTIFACTS_TABLE
+
+        async with self._database().transaction() as connection:
+            payload = await connection.scalar(
+                select(ARTIFACTS_TABLE.c.content).where(
+                    ARTIFACTS_TABLE.c.scope_id == self.scope_id,
+                    ARTIFACTS_TABLE.c.family == artifact_ref.family,
+                    ARTIFACTS_TABLE.c.artifact_id == artifact_ref.artifact_id,
+                    ARTIFACTS_TABLE.c.revision == artifact_ref.revision,
+                )
+            )
+        if payload is None:
+            return None
+        content = TopicMemoryContent.model_validate_json(bytes(payload))
+        return prepare_topic_memory_projection(content)
+
+    def _topic_index(self):
+        """Return the searchable Topic Memory index of this Runtime, when it has one."""
+
+        provider = getattr(self._runtime, "_provider", None)
+        return getattr(provider, "topic_memory_index", None)
+
+
+class SourceLifecycleApplication:
+    """Select the application service for one Source lifecycle scope."""
+
+    def __init__(self, runtime: BuiltinRuntime) -> None:
+        self._runtime = runtime
+
+    def for_scope(self, scope_id: str, /) -> ScopedSourceLifecycleApplication:
+        return ScopedSourceLifecycleApplication(self._runtime, scope_id)
+
 class MemoryApplication:
     """Select the application service for one Memory family scope."""
 
@@ -3129,6 +3494,7 @@ class BuiltinRuntime:
         self.external_skills = ExternalSkillApplication(self)
         self.handoff = HandoffApplication(self)
         self.work = WorkApplication(self)
+        self.lifecycle = SourceLifecycleApplication(self)
         self.memory = MemoryApplication(self)
         self.topic_memory = TopicMemoryApplication(self)
         self.records = RecordApplication(self)

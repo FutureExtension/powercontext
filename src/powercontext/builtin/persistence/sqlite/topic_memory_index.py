@@ -353,6 +353,17 @@ class SQLiteTopicMemoryFTSIndex:
         if marker is None:
             await connection.execute(insert(SQLITE_TOPIC_MEMORY_FTS_MARKER_TABLE).values(singleton=1, schema_version=1))
 
+    async def delete(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        topic_ref: ArtifactRef,
+        /,
+    ) -> None:
+        identity = {"scope_id": scope_id, "artifact_id": topic_ref.artifact_id}
+        await connection.execute(_DELETE_TOPIC_FTS_SQL, identity)
+        await connection.execute(_DELETE_CHUNK_FTS_SQL, identity)
+
     async def replace(
         self,
         connection: AsyncConnection,
@@ -536,6 +547,15 @@ class SQLiteTopicMemoryVectorIndex:
                     await transaction.rollback()
         except SQLAlchemyError as error:
             raise TopicMemoryCapabilityError("vector", f"sqlite-vec probe failed: {error}") from error
+
+    async def delete(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        topic_ref: ArtifactRef,
+        /,
+    ) -> None:
+        await self._delete_existing(connection, scope_id, topic_ref.artifact_id)
 
     async def replace(
         self,

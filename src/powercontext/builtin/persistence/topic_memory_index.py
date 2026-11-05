@@ -55,6 +55,21 @@ class TopicMemoryIndex(Protocol):
         /,
     ) -> None: ...
 
+    async def delete(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        topic_ref: ArtifactRef,
+        /,
+    ) -> None:
+        """Remove one topic from the searchable index.
+
+        The active relational projection stays readable; only the searchable
+        representation of that topic is withdrawn.
+        """
+
+        ...
+
     async def search(
         self,
         connection: AsyncConnection,
@@ -90,6 +105,15 @@ class NoTopicMemoryIndex:
         _scope_id: str,
         _topic_ref: ArtifactRef,
         _projection: TopicMemoryProjection,
+        /,
+    ) -> None:
+        pass
+
+    async def delete(
+        self,
+        _connection: AsyncConnection,
+        _scope_id: str,
+        _topic_ref: ArtifactRef,
         /,
     ) -> None:
         pass
@@ -138,6 +162,16 @@ class CompositeTopicMemoryIndex:
     async def validate_current(self, connection: AsyncConnection, /) -> None:
         for index in self.indexes:
             await index.validate_current(connection)
+
+    async def delete(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        topic_ref: ArtifactRef,
+        /,
+    ) -> None:
+        for index in self.indexes:
+            await index.delete(connection, scope_id, topic_ref)
 
     async def replace(
         self,
