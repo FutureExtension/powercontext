@@ -27,6 +27,9 @@ before the two candidate lists are unioned.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
+
 from pyobvector import VECTOR
 from sqlalchemy import Table, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -64,7 +67,10 @@ WITH fts_candidates AS (
       AND h.memory_artifact_id IN :memory_artifact_ids
       AND MATCH(h.searchable_text) AGAINST (:analyzed_query IN BOOLEAN MODE)
 {fts_tag_predicate}
-    ORDER BY fts_score DESC
+    ORDER BY fts_score DESC,
+             memory_artifact_id,
+             entry_id,
+             entry_version_id
     LIMIT :candidate_limit
 ),
 vector_candidates AS (
@@ -110,6 +116,39 @@ SELECT g.scope_id,
        g.fts_score
 FROM vector_candidates g
 """
+
+
+def _fts_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Order lexical candidates exactly like the former FTS candidate query."""
+
+    return (
+        -float(row["fts_score"] or 0.0),
+        str(row["memory_artifact_id"]),
+        str(row["entry_id"]),
+        str(row["entry_version_id"]),
+    )
+
+
+def _vector_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Order vector candidates by distance, then by identity."""
+
+    distance = row["distance"]
+    return (
+        float(distance) if distance is not None else 0.0,
+        str(row["memory_artifact_id"]),
+        str(row["entry_id"]),
+        str(row["entry_version_id"]),
+    )
+
+
+def _ordered(
+    rows: Sequence[Mapping[str, Any]],
+    channel: str,
+    key: Callable[[Mapping[str, Any]], tuple[Any, ...]],
+) -> list[Mapping[str, Any]]:
+    """Return one channel of the result, ordered deterministically."""
+
+    return sorted((row for row in rows if row["channel"] == channel), key=key)
 
 
 class OceanBaseMemoryHybridIndex:
@@ -219,8 +258,12 @@ class OceanBaseMemoryHybridIndex:
                 },
             )
         ).mappings().all()
-        fts_rows = [row for row in rows if row["channel"] == "fts"]
-        vector_rows = [row for row in rows if row["channel"] == "vector"]
+        # A UNION ALL does not guarantee that each branch keeps its own
+        # ORDER BY, so the two channels are ordered here. The candidate
+        # sets already match the former two-statement path because the
+        # branch LIMIT is applied before the union.
+        fts_rows = _ordered(rows, "fts", _fts_key)
+        vector_rows = _ordered(rows, "vector", _vector_key)
         return MemorySearchChannels(
             fts=memory_channel_hits(fts_rows, request.memories),
             vector=memory_channel_hits(vector_rows, request.memories),
