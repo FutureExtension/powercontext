@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 OceanBase.
+# Copyright (c) 2026 OceanBase.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import io
-import re
+import math
 from collections import Counter
 from urllib.parse import quote
 
@@ -31,9 +31,8 @@ from powercontext.sources.projections import TEXT_EVIDENCE_PROJECTION_KEY, TextE
 
 PDF_PAGE_SOURCE_NAME = "pdf-page"
 PDF_PAGE_SOURCE_VERSION = "1"
-_TOKEN = re.compile(r"[a-z0-9]+")
-_CANDIDATE_FACTOR = 8
-_MIN_CANDIDATES = 64
+_PAIR_CANDIDATES = 100
+_RRF_K = 60.0
 
 
 class PDFDocumentInput(BaseModel):
@@ -112,7 +111,6 @@ def _extract_pages(data: bytes) -> list[str]:
     """Return the extractable text of every physical page, in order."""
 
     from pypdf import PdfReader
-    from pypdf.errors import PdfReadError
 
     try:
         reader = PdfReader(io.BytesIO(data))
@@ -192,11 +190,18 @@ class PDFPageTextEvidenceProjection:
 async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
     """Return the distinct PDF pages that best answer one question.
 
-    The pages are read back through the public Memory API, so every returned citation is
-    an exact reference to one stored page.
+    A long natural-language question rarely matches a page verbatim, and a long query also
+    makes the lexical admission floor reject every page that does not echo most of the
+    question. The question is therefore split into its lexical terms and looked up as
+    adjacent term pairs: a short query is admitted far more easily and keeps the ranking
+    close to the question's wording. The per-pair result lists are then fused with an
+    inverse-document-frequency weighted reciprocal rank fusion, so a page that answers one
+    rare pair outranks a page that echoes common words. Every returned citation is read back
+    through the public Memory API, so it points at one exact stored page.
     """
 
     from powercontext.builtin.artifacts.memory.models import MemoryCitation
+    from powercontext.builtin.artifacts.search import analyze_fts_query, analyze_text
     from powercontext.builtin.runtime.models import GetMemoryEntryRequest, SearchMemoryRequest
 
     if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
@@ -204,51 +209,85 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
     if not isinstance(question, str) or not question.strip():
         raise ValueError("question must be a non-empty string")
 
-    terms = _question_terms(question)
-    page = await memory.search(
-        SearchMemoryRequest(query=question, mode="fts", limit=max(limit * _CANDIDATE_FACTOR, _MIN_CANDIDATES))
-    )
-    ranked: list[tuple[float, int, MemoryCitation, str]] = []
-    seen: set[str] = set()
-    for rank, hit in enumerate(page.hits):
-        citation = MemoryCitation(
-            memory_ref=hit.memory_ref,
-            entry_id=hit.entry_id,
-            entry_version_id=hit.entry_version_id,
+    terms = tuple(analyze_fts_query(question).split())
+    if not terms:
+        return ()
+    weights = await _term_weights(memory, terms, analyze_text)
+    queries = _pair_queries(terms, weights)
+    if not queries:
+        return ()
+
+    scores: dict[str, float] = {}
+    citations: dict[str, object] = {}
+    for query, weight in queries:
+        page = await memory.search(
+            SearchMemoryRequest(query=query, mode="fts", limit=_PAIR_CANDIDATES)
         )
+        for rank, hit in enumerate(page.hits, start=1):
+            key = hit.entry_id
+            citations.setdefault(
+                key,
+                MemoryCitation(
+                    memory_ref=hit.memory_ref,
+                    entry_id=hit.entry_id,
+                    entry_version_id=hit.entry_version_id,
+                ),
+            )
+            scores[key] = scores.get(key, 0.0) + weight / (_RRF_K + rank)
+    if not scores:
+        return ()
+
+    ordered = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    selected: list[object] = []
+    seen: set[tuple[str, ...]] = set()
+    for entry_id, _score in ordered:
+        if len(selected) >= limit:
+            break
+        citation = citations[entry_id]
         try:
-            entry = await memory.get(GetMemoryEntryRequest(citation=citation))
+            record = await memory.get(GetMemoryEntryRequest(citation=citation))
         except Exception:  # noqa: BLE001 - a vanished head must not break the search
             continue
-        identity = _entry_identity(entry)
-        if identity in seen:
+        identity = tuple(sorted(reference.source_id for reference in record.entry.sources))
+        if not identity or identity in seen:
             continue
         seen.add(identity)
-        ranked.append((_overlap_score(terms, entry.entry.text), -rank, citation, identity))
-    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    selected = ranked[:limit]
-    return tuple(citation for _, _, citation, _ in selected)
+        selected.append(citation)
+    return tuple(selected)
 
 
-def _entry_identity(entry) -> str:
-    return "|".join(sorted(reference.source_id for reference in entry.entry.sources))
+def _pair_queries(terms: tuple[str, ...], weights: dict[str, float]) -> tuple[tuple[str, float], ...]:
+    """Return the adjacent term-pair queries and the weight of each pair."""
 
+    if len(terms) < 2:
+        return tuple((term, weights.get(term, 1.0)) for term in terms)
+    queries: list[tuple[str, float]] = []
+    for index in range(len(terms) - 1):
+        left, right = terms[index], terms[index + 1]
+        weight = weights.get(left, 1.0)
+        queries.append((f"{left} {right}", weight))
+    return tuple(queries)
 
-def _question_terms(question: str) -> Counter:
-    return Counter(_TOKEN.findall(question.lower()))
+async def _term_weights(memory, terms: tuple[str, ...], analyze_text) -> dict[str, float]:
+    """Return the inverse document frequency of every question term in the scope."""
 
-
-def _overlap_score(terms: Counter, text: str) -> float:
-    if not terms:
-        return 0.0
-    tokens = _TOKEN.findall(text.lower())
-    counts = Counter(tokens)
-    score = 0.0
-    for term, weight in terms.items():
-        found = counts.get(term, 0)
-        if found:
-            score += weight * (1.0 + found ** 0.5)
-    return score
+    total = 0
+    frequencies: Counter[str] = Counter()
+    try:
+        listing = await memory.list(include_inactive=True)
+    except Exception:  # noqa: BLE001 - the listing is an optimisation, not a requirement
+        return {term: 1.0 for term in terms}
+    for record in listing.entries:
+        total += 1
+        for term in set(analyze_text(record.entry.text).split()):
+            frequencies[term] += 1
+    if not total:
+        return {term: 1.0 for term in terms}
+    weights: dict[str, float] = {}
+    for term in terms:
+        document_frequency = frequencies.get(term, 0)
+        weights[term] = math.log(1 + (total - document_frequency + 0.5) / (document_frequency + 0.5))
+    return weights
 
 
 PDF_PAGE_ADAPTER = PDFPageAdapter()
