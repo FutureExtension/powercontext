@@ -29,6 +29,13 @@ from powercontext.builtin.artifacts.profile.models import Profile
 from powercontext.builtin.artifacts.topic_memory import TopicMemory, TopicMemorySearchHit
 from powercontext.builtin.runtime.errors import PreparedContextInvariantError
 from powercontext.builtin.runtime.models import PrepareContextRequest, PreparedContext
+from powercontext.builtin.runtime.prepared_evidence import (
+    character_overlap,
+    merge_spans,
+    query_terms,
+    score_segment,
+    split_segments,
+)
 from powercontext.builtin.runtime.prepared_code import (
     CodeEvidenceRef,
     PreparedCodeCandidate,
@@ -106,6 +113,7 @@ class PreparedContextBuild:
     origins: tuple[PreparedContextOrigin, ...]
     omissions: PreparedContextOmissions = PreparedContextOmissions()
     code_origins: tuple[CodeEvidenceRef, ...] = ()
+    fragments: tuple[MemoryEvidenceFragment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -115,6 +123,35 @@ class MemoryEntryAddress:
     memory: ArtifactAddress
     entry_id: str
     entry_version_id: str
+
+
+@dataclass(frozen=True)
+class MemoryEvidenceFragment:
+    """One literal span of a Memory entry selected for the current query."""
+
+    address: MemoryEntryAddress
+    start: int
+    end: int
+    text: str
+
+
+@dataclass(frozen=True)
+class _EvidenceUnit:
+    """One scored segment of one Memory candidate.
+
+    The unit is a scoring decision, not a delivered fragment: delivered fragments are the
+    merged, literal spans these units produce.
+    """
+
+    scope_id: str
+    hit: MemoryHit
+    group_index: int
+    rank: int
+    order: int
+    start: int
+    end: int
+    text: str
+    score: float
 
 
 PreparedContextOrigin = MemoryCitation | ArtifactRef | MemoryEntryAddress | ArtifactAddress
@@ -149,6 +186,7 @@ class PreparedContextBuilder:
     """Select and render final context without I/O, persistence, or reranking."""
 
     memory_candidate_limit = 16
+    evidence_candidate_limit = 64
     topic_memory_candidate_limit = 8
     experience_candidate_limit = 8
     candidate_limit = memory_candidate_limit
@@ -235,6 +273,13 @@ class PreparedContextBuilder:
         if sum(len(candidates.hits) for candidates in experience_candidates) > self.experience_candidate_limit:
             raise PreparedContextInvariantError("experience-candidate-limit")
 
+        if request.evidence_selection:
+            return self._build_evidence_selection(
+                request=request,
+                current_scope_id=current_scope_id,
+                memory_candidates=memory_candidates,
+            )
+
         content, origins, omissions = self._select_entries(
             request=request,
             current_scope_id=current_scope_id,
@@ -276,6 +321,21 @@ class PreparedContextBuilder:
         the same inputs as :meth:`build_scopes_result` are guaranteed to yield the same
         counters because both go through :meth:`_select_entries`.
         """
+
+        if request.evidence_selection:
+            build = self._build_evidence_selection(
+                request=request,
+                current_scope_id=current_scope_id,
+                memory_candidates=memory_candidates,
+            )
+            probe_bytes = build.context.content_bytes
+            return RecallBudgetView(
+                max_bytes=request.max_bytes,
+                delivered_items=len(build.origins),
+                truncated_items=build.omissions.truncated_items,
+                dropped_items=build.omissions.dropped_items,
+                unused_bytes=max(0, request.max_bytes - probe_bytes),
+            )
 
         content, origins, omissions = self._select_entries(
             request=request,
@@ -346,6 +406,77 @@ class PreparedContextBuilder:
         if not entries:
             return None, (), omissions
         return _render(entries), tuple(entry.origin for entry in entries), omissions
+
+    def _build_evidence_selection(
+        self,
+        *,
+        request: PrepareContextRequest,
+        current_scope_id: str | None,
+        memory_candidates: Sequence[PreparedMemoryCandidates],
+    ) -> PreparedContextBuild:
+        """Select literal, query-relevant spans from Memory candidates under the byte budget.
+
+        Fragments are always exact substrings of the stored Memory entry, so every delivered
+        span can be checked against the original record through its citation.
+        """
+
+        words, cjk = query_terms(request.query)
+        units: list[_EvidenceUnit] = []
+        for group_index, candidates in enumerate(memory_candidates):
+            for rank, hit in enumerate(candidates.hits):
+                text = hit.text
+                if not text:
+                    continue
+                spans = split_segments(text) or ((0, len(text)),)
+                for order, (span_start, span_end) in enumerate(spans):
+                    segment = text[span_start:span_end]
+                    units.append(
+                        _EvidenceUnit(
+                            scope_id=candidates.scope_id,
+                            hit=hit,
+                            group_index=group_index,
+                            rank=rank,
+                            order=order,
+                            start=span_start,
+                            end=span_end,
+                            text=segment,
+                            score=score_segment(words, cjk, segment),
+                        )
+                    )
+        if not units:
+            return PreparedContextBuild(context=self.empty(), origins=(), fragments=())
+
+        if any(unit.score > 0 for unit in units):
+            pool = [unit for unit in units if unit.score > 0]
+        else:
+            pool = [replace(unit, score=character_overlap(request.query, unit.text)) for unit in units]
+        ordered = sorted(pool, key=lambda unit: (-unit.score, unit.group_index, unit.rank, unit.order))
+        ordered = ordered[: self.evidence_candidate_limit]
+
+        selected: list[_EvidenceUnit] = []
+        fragments: list[MemoryEvidenceFragment] = []
+        items: list[dict[str, object]] = []
+        for unit in ordered:
+            trial = [*selected, unit]
+            trial_fragments, trial_items = _evidence_fragments(trial)
+            trial_content = _render_evidence(trial_items)
+            if len(trial_content.encode("utf-8")) > request.max_bytes:
+                continue
+            selected = trial
+            fragments = trial_fragments
+            items = trial_items
+        if not items:
+            return PreparedContextBuild(context=self.empty(), origins=(), fragments=())
+
+        content = _render_evidence(items)
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > request.max_bytes:
+            raise PreparedContextInvariantError("output-budget")
+        return PreparedContextBuild(
+            context=PreparedContext(status="ready", content=content, content_bytes=content_bytes),
+            origins=tuple(fragment.address for fragment in fragments),
+            fragments=tuple(fragments),
+        )
 
     def _select_text(
         self,
@@ -683,6 +814,54 @@ def _interleave_groups(groups: Sequence[Sequence[_Item]]) -> tuple[_Item, ...]:
     for index in range(max((len(group) for group in groups), default=0)):
         ordered.extend(group[index] for group in groups if index < len(group))
     return tuple(ordered)
+
+
+def _evidence_fragments(
+    units: Sequence[_EvidenceUnit],
+) -> tuple[list[MemoryEvidenceFragment], list[dict[str, object]]]:
+    """Merge the selected units into literal, citable fragments and their rendered items."""
+
+    grouped: dict[tuple[str, str, str], list[_EvidenceUnit]] = {}
+    for unit in units:
+        identity = (unit.scope_id, unit.hit.entry_id, unit.hit.entry_version_id)
+        grouped.setdefault(identity, []).append(unit)
+    fragments: list[MemoryEvidenceFragment] = []
+    items: list[dict[str, object]] = []
+    for (scope_id, entry_id, entry_version_id), group in grouped.items():
+        hit = group[0].hit
+        spans = merge_spans(hit.text, tuple((unit.start, unit.end) for unit in group))
+        for span_start, span_end in spans:
+            text = hit.text[span_start:span_end]
+            address = MemoryEntryAddress(
+                memory=ArtifactAddress(scope_id=scope_id, artifact=hit.memory_ref),
+                entry_id=entry_id,
+                entry_version_id=entry_version_id,
+            )
+            fragments.append(
+                MemoryEvidenceFragment(address=address, start=span_start, end=span_end, text=text)
+            )
+            items.append(
+                {
+                    "citation": {
+                        "scope_id": scope_id,
+                        "memory_ref": hit.memory_ref.model_dump(mode="json"),
+                        "entry_id": entry_id,
+                        "entry_version_id": entry_version_id,
+                    },
+                    "content": text,
+                    "start": span_start,
+                    "end": span_end,
+                }
+            )
+    return fragments, items
+
+
+def _render_evidence(items: Sequence[dict[str, object]]) -> str:
+    """Render the selected evidence in the standard prepared-context envelope."""
+
+    envelope = {"trust": "untrusted_history", "items": list(items)}
+    encoded = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+    return "\n\n".join((TRUST_POLICY, f"{_BEGIN_MARKER}\n{encoded}\n{_END_MARKER}"))
 
 
 def _render(entries: Sequence[_PreparedContextEntry]) -> str:
