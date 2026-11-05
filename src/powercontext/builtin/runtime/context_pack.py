@@ -81,6 +81,45 @@ def _require_digest(value: object, field: str) -> str:
     return value
 
 
+def _split_capacity(data: bytes, chunk_bytes: int) -> list[bytes]:
+    """Split one byte run into bounded, valid UTF-8 pieces."""
+
+    chunks: list[bytes] = []
+    start = 0
+    while start < len(data):
+        end = min(start + chunk_bytes, len(data))
+        while end > start:
+            try:
+                data[start:end].decode("utf-8")
+                break
+            except UnicodeDecodeError:
+                end -= 1
+        if end == start:
+            raise ContextPackError("chunk_bytes cannot hold one UTF-8 character")
+        chunks.append(data[start:end])
+        start = end
+    return chunks
+
+
+def _chunk_bytes(data: bytes, chunk_bytes: int) -> tuple[bytes, ...]:
+    """Chunk one payload along line boundaries, then along the byte budget.
+
+    Line-aligned chunks keep a stable document prefix reusable: a change inside one long
+    line only invalidates the chunks of that line, not the chunks before it.
+    """
+
+    chunks: list[bytes] = []
+    for line in data.splitlines(keepends=True):
+        encoded = line
+        if len(encoded) <= chunk_bytes:
+            chunks.append(encoded)
+            continue
+        chunks.extend(_split_capacity(encoded, chunk_bytes))
+    if not chunks and data:
+        chunks.extend(_split_capacity(data, chunk_bytes))
+    return tuple(chunks)
+
+
 def _pack_payload(items: tuple[bytes, ...], digest: str) -> bytes:
     """Encode one pack, resolving the self-referential byte count exactly."""
 
@@ -126,21 +165,7 @@ class ContextPack:
             raise ContextPackError("content must be text or bytes")
         if not data:
             return cls.build(())
-        chunks: list[bytes] = []
-        start = 0
-        while start < len(data):
-            end = min(start + chunk_bytes, len(data))
-            while end > start:
-                try:
-                    data[start:end].decode("utf-8")
-                    break
-                except UnicodeDecodeError:
-                    end -= 1
-            if end == start:
-                raise ContextPackError("chunk_bytes cannot hold one UTF-8 character")
-            chunks.append(data[start:end])
-            start = end
-        return cls.build(tuple(chunks))
+        return cls.build(_chunk_bytes(data, chunk_bytes))
 
     def to_bytes(self) -> bytes:
         """Encode the pack for the wire."""
