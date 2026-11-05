@@ -83,6 +83,7 @@ from powercontext.builtin.inference.usage import (
 from powercontext.builtin.persistence.dream_schema import ensure_dream_schema
 from powercontext.builtin.persistence.memory_index import CompositeMemoryIndex, MemoryIndex
 from powercontext.builtin.persistence.oceanbase.experience_index import OceanBaseExperienceFTSIndex
+from powercontext.builtin.persistence.oceanbase.memory_hybrid import OceanBaseMemoryHybridIndex
 from powercontext.builtin.persistence.oceanbase.memory_index import (
     OceanBaseMemoryFTSIndex,
     OceanBaseMemoryVectorIndex,
@@ -719,6 +720,12 @@ def _artifact_processing_bindings(  # noqa: C901 - validate and assemble one reg
         "profile": config.runtime.profile_schedule_enabled or None,
         "skill": None,
     }
+    # A count threshold admits one ordinary processing call per reached
+    # threshold, beside the independent time condition.
+    count_thresholds = {
+        "memory": config.runtime.memory_source_count_threshold,
+        "topic-memory": config.runtime.topic_memory_source_count_threshold,
+    }
     for family, schedule in automatic.items():
         if schedule is not None and family not in declared | registered:
             if (
@@ -787,6 +794,7 @@ def _artifact_processing_bindings(  # noqa: C901 - validate and assemble one reg
                 if family == "skill"
                 else SourceProcessingPendingProvider(contexts.database, binding, family),
                 automatic_scope_filter=enabled_profile_scopes if family == "profile" else None,
+                source_count_threshold=count_thresholds.get(family),
             )
         )
     _validate_processing_registrations(configured)
@@ -962,7 +970,11 @@ async def open_builtin_contexts(
     experience_index = OceanBaseExperienceFTSIndex()
     indexes = [OceanBaseMemoryFTSIndex()]
     if embedding_model is not None:
-        indexes.append(OceanBaseMemoryVectorIndex(embedding_model.profile))
+        vector_index = OceanBaseMemoryVectorIndex(embedding_model.profile)
+        indexes.append(vector_index)
+        # One native statement retrieves both candidate channels for a hybrid
+        # search; the single-channel indexes keep their own modes.
+        indexes.append(OceanBaseMemoryHybridIndex(embedding_model.profile, vector_index=vector_index))
     index = CompositeMemoryIndex(*indexes)
     topic_indexes: list[TopicMemoryIndex] = [OceanBaseTopicMemoryFTSIndex()]
     if embedding_model is not None:

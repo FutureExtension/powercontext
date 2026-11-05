@@ -1,0 +1,228 @@
+{
+  "meta": {
+    "startedAt": "2026-11-05T18:35:21.633Z",
+    "node": "v22.14.0",
+    "platform": "win32 x64",
+    "cpu": "Intel(R) Core(TM) i5-5250U CPU @ 1.60GHz",
+    "cpuCount": 3,
+    "modelId": "Xenova/bge-small-zh-v1.5",
+    "dtype": "q8",
+    "batchSize": 16,
+    "repeat": 3,
+    "corpus": {
+      "docs": 36,
+      "source": "src/corpus.mjs DEMO_DOCS"
+    },
+    "note": "Node 端 onnxruntime-node（CPU）口径；浏览器端 WebGPU/WASM 数据见 docs/performance.md"
+  },
+  "stages": {
+    "modelFetchMs": 334.44,
+    "modelLoadMs": 11760.08,
+    "documentEmbedMs": 4288.13,
+    "writeMs": 2995.8,
+    "refreshIndexMs": 614.04,
+    "queryEmbedMs": 33.96,
+    "seekdbSearchMs": 44.96,
+    "totalMs": 20071.41
+  },
+  "throughput": {
+    "chunks": 36,
+    "embedDocsPerSec": 8.4
+  },
+  "latency": {
+    "endToEndQueryMs": 127.87,
+    "endToEndQueryP95Ms": 139.11
+  },
+  "samples": {
+    "documentEmbedMs": [
+      4288.13,
+      2536.77,
+      4512.33
+    ],
+    "queryEmbedMs": [
+      33.96,
+      101.62,
+      8.38
+    ],
+    "seekdbSearchMs": [
+      106.4,
+      26.25,
+      44.96
+    ]
+  },
+  "comparison": [
+    {
+      "dtype": "fp32",
+      "modelBytes": 94851877,
+      "modelMiB": 90.46,
+      "compressionRatio": 1,
+      "modelLoadMs": 1647.4,
+      "documentEmbedMs": 6759.57,
+      "embedDocsPerSec": 5.33,
+      "writeMs": 688.65,
+      "refreshIndexMs": 472.22,
+      "queryEmbedMs": 18.22,
+      "seekdbSearchMs": 32.52,
+      "endToEndQueryMs": 102.12,
+      "recallAtK": 0.7917,
+      "hitRateAtK": 0.9286,
+      "ndcgAtK": 0.7762
+    },
+    {
+      "dtype": "fp16",
+      "modelBytes": 47497427,
+      "modelMiB": 45.3,
+      "compressionRatio": 1.997,
+      "modelLoadMs": 1150.75,
+      "documentEmbedMs": 3449.94,
+      "embedDocsPerSec": 10.43,
+      "writeMs": 412.49,
+      "refreshIndexMs": 345.45,
+      "queryEmbedMs": 12,
+      "seekdbSearchMs": 16.78,
+      "endToEndQueryMs": 54.79,
+      "recallAtK": 0.7917,
+      "hitRateAtK": 0.9286,
+      "ndcgAtK": 0.7762
+    },
+    {
+      "dtype": "q8",
+      "modelBytes": 24010842,
+      "modelMiB": 22.9,
+      "compressionRatio": 3.9504,
+      "modelLoadMs": 335.44,
+      "documentEmbedMs": 3369.91,
+      "embedDocsPerSec": 10.68,
+      "writeMs": 473.6,
+      "refreshIndexMs": 312.58,
+      "queryEmbedMs": 8.62,
+      "seekdbSearchMs": 18.78,
+      "endToEndQueryMs": 25.93,
+      "recallAtK": 0.8274,
+      "hitRateAtK": 0.9643,
+      "ndcgAtK": 0.79
+    }
+  ],
+  "batchSweep": [
+    {
+      "batchSize": 1,
+      "documentEmbedMs": 2614.09,
+      "embedSamplesMs": [
+        2614.09,
+        2739.59,
+        2664.94,
+        2491.51,
+        2535.95
+      ],
+      "embedDocsPerSec": 13.77
+    },
+    {
+      "batchSize": 4,
+      "documentEmbedMs": 2948.51,
+      "embedSamplesMs": [
+        2948.51,
+        2560.74,
+        3118.58,
+        2665.09,
+        3137.26
+      ],
+      "embedDocsPerSec": 12.21
+    },
+    {
+      "batchSize": 8,
+      "documentEmbedMs": 3645.32,
+      "embedSamplesMs": [
+        3004.31,
+        4058.94,
+        3645.32,
+        5624.86,
+        3515.28
+      ],
+      "embedDocsPerSec": 9.88
+    },
+    {
+      "batchSize": 16,
+      "documentEmbedMs": 2659.39,
+      "embedSamplesMs": [
+        3426.47,
+        2428.08,
+        3023.75,
+        2602.25,
+        2659.39
+      ],
+      "embedDocsPerSec": 13.54
+    },
+    {
+      "batchSize": 32,
+      "documentEmbedMs": 3033.03,
+      "embedSamplesMs": [
+        2985.59,
+        3317.83,
+        3033.03,
+        2967.55,
+        4030.6
+      ],
+      "embedDocsPerSec": 11.87
+    },
+    {
+      "batchSize": 64,
+      "documentEmbedMs": 2832.09,
+      "embedSamplesMs": [
+        3650.07,
+        4781.05,
+        2832.09,
+        2740.35,
+        2568.6
+      ],
+      "embedDocsPerSec": 12.71
+    }
+  ],
+  "quality": {
+    "topK": 5,
+    "queries": 28,
+    "recallAtK": 0.8274,
+    "hitRateAtK": 0.9643,
+    "ndcgAtK": 0.79
+  },
+  "main": {
+    "dtype": "q8",
+    "batchSize": 16,
+    "modelFetchMs": 334.44,
+    "modelBytes": 24010842,
+    "modelLoadMs": 11760.08,
+    "chunks": 36,
+    "documentEmbedMs": 4288.13,
+    "embedSamplesMs": [
+      4288.13,
+      2536.77,
+      4512.33
+    ],
+    "embedThroughputDocsPerSec": 8.4,
+    "collection": "kb_bge_small_zh_v1_5_q8",
+    "table": "c$v2$eb00a95d1de611b29f82525400f705f0",
+    "writeMs": 2995.8,
+    "refreshIndexMs": 614.04,
+    "rows": 36,
+    "queryEmbedMs": 33.96,
+    "queryEmbedSamplesMs": [
+      33.96,
+      101.62,
+      8.38
+    ],
+    "seekdbSearchMs": 44.96,
+    "seekdbSearchSamplesMs": [
+      106.4,
+      26.25,
+      44.96
+    ],
+    "endToEndQueryMs": 127.87,
+    "endToEndQueryP95Ms": 139.11,
+    "quality": {
+      "topK": 5,
+      "queries": 28,
+      "recallAtK": 0.8274,
+      "hitRateAtK": 0.9643,
+      "ndcgAtK": 0.79
+    }
+  }
+}

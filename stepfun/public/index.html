@@ -1,0 +1,119 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>StepFun × seekdb · 端侧向量化混合检索迷你知识库</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <div>
+      <h1>StepFun × seekdb 迷你知识库</h1>
+      <p class="sub">浏览器端本地向量化 · seekdb 数据库侧混合检索</p>
+    </div>
+  </div>
+  <div class="status-chips">
+    <span class="chip" id="chip-backend" title="当前 ONNX Runtime 推理后端">
+      <em>推理后端</em><b id="backend-value">检测中…</b>
+    </span>
+    <span class="chip" id="chip-model">
+      <em>模型</em><b id="model-value">—</b>
+    </span>
+    <span class="chip" id="chip-collection">
+      <em>集合</em><b id="collection-value">—</b>
+    </span>
+    <span class="chip" id="chip-docs">
+      <em>文档数</em><b id="docs-value">0</b>
+    </span>
+  </div>
+</header>
+
+<div id="banner" class="banner hidden"></div>
+
+<main class="layout">
+  <!-- ============ 左：导入 ============ -->
+  <section class="panel">
+    <h2><span class="step">1</span>导入语料</h2>
+
+    <div class="field-row">
+      <label>Embedding 模型
+        <select id="sel-model"></select>
+      </label>
+      <label>推理精度
+        <select id="sel-dtype"></select>
+      </label>
+    </div>
+
+    <div class="field-row">
+      <label>批大小 (batch)
+        <input id="in-batch" type="number" value="16" min="1" max="128" />
+      </label>
+      <label>切块上限 (字符)
+        <input id="in-chunk" type="number" value="480" min="80" max="2000" />
+      </label>
+    </div>
+
+    <label class="block-label">文档（每行一段，或用空行分隔多篇）
+      <textarea id="in-docs" placeholder="在此粘贴或拖入 .txt / .md 文件…"></textarea>
+    </label>
+
+    <div class="btn-row">
+      <button id="btn-demo" class="ghost">载入示例语料</button>
+      <button id="btn-file" class="ghost">选择文件…</button>
+      <input id="file-input" type="file" accept=".txt,.md,.json" multiple hidden />
+      <button id="btn-import" class="primary">向量化并写入 seekdb</button>
+      <button id="btn-reset" class="danger">重置集合</button>
+    </div>
+
+    <div class="progress-wrap">
+      <div class="progress"><div id="bar-import"></div></div>
+      <span id="import-status" class="muted">未开始</span>
+    </div>
+
+    <details class="sql-box">
+      <summary>最近一次写入 / 检索使用的 SQL</summary>
+      <pre id="sql-log">（尚无）</pre>
+    </details>
+  </section>
+
+  <!-- ============ 右：检索 ============ -->
+  <section class="panel">
+    <h2><span class="step">2</span>混合检索</h2>
+
+    <label class="block-label">查询
+      <div class="search-row">
+        <input id="in-query" type="text" placeholder="例如：RRF 融合算法是怎么工作的" />
+        <button id="btn-search" class="primary">检索</button>
+      </div>
+    </label>
+
+    <div class="field-row">
+      <label>Top-K <input id="in-topk" type="number" value="8" min="1" max="50" /></label>
+      <label>RRF rank_constant <input id="in-rrf-k" type="number" value="60" min="1" max="200" /></label>
+      <label>RRF rank_window <input id="in-rrf-w" type="number" value="60" min="1" max="200" /></label>
+    </div>
+
+    <div id="results" class="results"></div>
+  </section>
+</main>
+
+<!-- ============ 性能面板 ============ -->
+<section class="perf">
+  <h2>性能计时 <small>（分阶段，毫秒）</small></h2>
+  <table id="perf-table">
+    <thead>
+      <tr><th>阶段</th><th>最近一次</th><th>中位数</th><th>次数</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <p class="muted small">
+    模型下载 / 加载只统计一次（首次），其余阶段区分首次与预热后请求。
+  </p>
+</section>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -50,6 +50,7 @@ from powercontext._logging import log_safely
 from powercontext.builtin.persistence.database import AsyncDatabase
 from powercontext.builtin.persistence.errors import ArtifactProcessingLeadershipLostError
 from powercontext.builtin.persistence.processing_intents import ArtifactProcessingIntentRepository
+from powercontext.builtin.persistence.source_counts import SourceCountRepository
 from powercontext.builtin.persistence.supervision import (
     ArtifactProcessingBindingStateRepository,
     ArtifactProcessingFence,
@@ -80,8 +81,13 @@ _RETRY_STATE_LIMIT = 1000
 _CHANNEL_QUEUE_LIMIT = _DISCOVERY_PAGE_SIZE // 2
 _DISCOVERY_PAGE_DELAY_SECONDS = 0.01
 _DISCOVERY_TIMEOUT_SECONDS = 2.0
+_COUNT_ADMISSION_POLL_SECONDS = 1.0
 _SPAWN_SIGTERM_GRACE_SECONDS = 1.0
 _WORKER_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+# Interpreter startup is not processing time. A Worker launch gets its own
+# generous budget so a loaded host cannot spend the whole execution
+# timeout before the child process is even alive.
+_WORKER_SPAWN_TIMEOUT_SECONDS = 120.0
 ProcessingKey = tuple[str, str]
 
 
@@ -117,6 +123,10 @@ class ArtifactProcessingBinding:
     # Only automatic admission is filtered; already accepted requests retain
     # their own Worker authorization and domain completion semantics.
     automatic_scope_filter: Callable[[AsyncConnection, tuple[str, ...]], Awaitable[frozenset[str]]] | None = None
+    # A count admission threshold starts one ordinary processing call once the
+    # binding's pending Source identities reach it. `None` keeps only the
+    # time-based admission.
+    source_count_threshold: int | None = None
 
     def __post_init__(self) -> None:
         if not self.binding_name or self.binding_name != self.binding_name.strip():
@@ -138,6 +148,10 @@ class ArtifactProcessingBinding:
                 raise ValueError("interval and cron cannot both be enabled")  # noqa: TRY003
         if self.cron is not None:
             CronTrigger.from_crontab(self.cron, timezone=ZoneInfo(self.timezone))
+        if self.source_count_threshold is not None and (
+            type(self.source_count_threshold) is not int or self.source_count_threshold < 1
+        ):
+            raise ValueError("source_count_threshold must be a positive integer")  # noqa: TRY003
 
 
 class _WorkerResultSender(Protocol):
@@ -396,6 +410,8 @@ class _FamilyState:
     scan_generation: int = 0
     scan_in_progress: bool = False
     reconcile_after: str | None = None
+    count_after: int = 0
+    next_count_at: float = 0.0
     reconcile_complete: bool = False
     notification_at_start: int = 0
     discovery_pending: bool = True
@@ -446,6 +462,7 @@ class ArtifactProcessingSupervisor:
         self._lease_mode = lease_mode
         self._supervisor_group = supervisor_group
         self._intents = intents or ArtifactProcessingIntentRepository()
+        self._counts = SourceCountRepository()
         self._leases = leases or ArtifactProcessingLeaseRepository()
         self._binding_states = binding_states or ArtifactProcessingBindingStateRepository()
         self.holder_id = holder_id or str(uuid4())
@@ -613,6 +630,8 @@ class ArtifactProcessingSupervisor:
             if self._fence is None or self._lease_lost:
                 raise ArtifactProcessingLeadershipLostError(self._supervisor_group, self.holder_id, 0)
             now = asyncio.get_running_loop().time()
+            if state.binding.source_count_threshold is not None:
+                state.next_count_at = now + _COUNT_ADMISSION_POLL_SECONDS
             # Reserve fresh admission before retries can occupy a newly freed
             # Worker. FIFO ready order then shares execution between channels.
             discoverable = (
@@ -648,6 +667,7 @@ class ArtifactProcessingSupervisor:
                 state.next_discovery_at = loop.time() + _DISCOVERY_PAGE_DELAY_SECONDS
         else:
             state.reconcile_complete = True
+        await self._discover_count(state)
         # Alternate discovery channels so explicit traffic cannot monopolize admission.
         state.automatic_next = not state.automatic_next
         if state.automatic_next:
@@ -656,6 +676,58 @@ class ArtifactProcessingSupervisor:
         else:
             await self._discover_requested(state)
             await self._discover_automatic(state)
+
+    async def _discover_count(self, state: _FamilyState) -> None:
+        """Accept one bounded page whose pending Source identities reach the threshold.
+
+        The count uses the persisted journal identity after the binding's last
+        committed Cursor, so a repeated capture never raises it. A scope that
+        already holds an accepted request keeps that request; the threshold is
+        only a second, independent admission condition beside the time one.
+        """
+
+        binding = state.binding
+        threshold = binding.source_count_threshold
+        if threshold is None:
+            return
+        capacity = self._fresh_capacity(state)
+        if capacity <= 0:
+            return
+        page = min(capacity, _DISCOVERY_PAGE_SIZE)
+        # Publish the page cursor only after the transaction commits, so a
+        # rolled-back admission is inspected again on the next pass.
+        scan_after = state.count_after
+        admitted: list[str] = []
+        async with self._database.transaction() as connection:
+            await self._leases.require_fence(connection, self._require_current_fence())
+            rows = await self._intents.scan(
+                connection,
+                binding.binding_name,
+                after_sequence=scan_after,
+                limit=page,
+                dirty_only=True,
+            )
+            counts = await self._counts.pending_counts(
+                connection,
+                tuple(row.scope_id for row in rows),
+                binding.binding_name,
+            )
+            for row in rows:
+                scan_after = row.pending_sequence
+                scope = row.scope_id
+                if scope in state.queued or scope in state.running or scope in state.retries:
+                    continue
+                if row.requested_generation > row.handled_generation:
+                    continue
+                if counts.get(scope, 0) < threshold:
+                    continue
+                await self._intents.request(connection, scope, binding.binding_name)
+                admitted.append(scope)
+            if len(rows) < page:
+                scan_after = 0
+        state.count_after = scan_after
+        for scope in admitted:
+            self._enqueue(state, scope)
 
     async def _discover_requested(self, state: _FamilyState) -> None:
         capacity = self._fresh_capacity(state)
@@ -877,13 +949,18 @@ class ArtifactProcessingSupervisor:
         with background as span:
             handle: ArtifactProcessingWorkerHandle | None = None
             try:
-                async with asyncio.timeout(binding.worker_timeout_seconds):
+                # Process startup is not processing time. The execution
+                # timeout below bounds the work itself; a slow launch gets
+                # its own budget so an accepted item is never dropped just
+                # because the host was busy starting an interpreter.
+                async with asyncio.timeout(_WORKER_SPAWN_TIMEOUT_SECONDS):
                     with (
                         nullcontext()
                         if self._tracing is None
                         else self._tracing.stage("artifact_processing.worker.start", attributes=attributes)
                     ):
                         handle = await binding.launcher.start(assignment)
+                async with asyncio.timeout(binding.worker_timeout_seconds):
                     with (
                         nullcontext()
                         if self._tracing is None
@@ -1093,6 +1170,8 @@ class ArtifactProcessingSupervisor:
                 continue
             if state.next_schedule_at is not None:
                 deadlines.append(state.next_schedule_at)
+            if state.binding.source_count_threshold is not None:
+                deadlines.append(state.next_count_at)
             if state.discovery_pending or state.scan_in_progress or not state.reconcile_complete or state.degraded:
                 deadlines.append(max(now, state.next_discovery_at))
         return None if not deadlines else max(0.001, min(deadlines) - now)
