@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import io
 import math
+import re
 from collections import Counter
 from urllib.parse import quote
 
@@ -40,10 +41,27 @@ _SINGLE_TERM_WEIGHT = 2.0
 _SINGLE_TERM_CANDIDATES = 3
 
 # A captured page becomes one memory entry whose text is the document identity
-# followed by the page text, and a memory entry holds at most 8192 UTF-8 bytes.
-# A page that does not fit would make the whole ingest of the document fail, so
-# its tail is trimmed instead.
+# followed by the page text, and a memory entry holds at most 8192 UTF-8 bytes
+# (the product's canonical entry limit).  A page that does not fit would make
+# the whole ingest of the document fail, so the page text is shortened.
+#
+# The acceptance measures a page by its **term count**: the platform freezes the
+# term count of every page from the original PDF and requires the stored page to
+# stay within 90% to 110% of it.  A blind tail cut spends terms with the bytes,
+# and on a dense financial page it drops below 90% of the terms (measured: 87.4%
+# on the densest page of the FinanceBench corpus).  The fitting therefore
+# prefers, in order:
+#
+#   1. no change at all;
+#   2. whitespace-only compaction, which keeps the term multiset identical;
+#   3. dropping the sparsest region - the fewest terms per byte, tail half
+#      first - as long as at least 90% of the terms survive;
+#   4. only when that is impossible, the previous behaviour: keep the head of
+#      the page.
 MEMORY_ENTRY_TEXT_LIMIT = 8192
+MIN_TERM_RETENTION = 0.90
+_TERM = re.compile(r"[A-Za-z]+|\d+")
+_SPACE_RUN = re.compile(r"[ \t\r\f\v]+")
 
 
 class PDFDocumentInput(BaseModel):
@@ -119,25 +137,50 @@ def fit_page_text(document_id: str, text: str) -> str:
     The projection of a page carries the document identity and the page text,
     and the entry that the runtime stores holds that projection.  A page whose
     text exceeds the entry limit would make the ingest of the whole document
-    fail, so the tail of that page is trimmed.  Financial reports repeat a
-    running footer on every page, so the tail carries little evidence and the
-    trim stays as small as the budget allows.  A page that fits is returned
-    unchanged.
+    fail, so the page text is shortened while keeping as many of its terms as
+    possible: the acceptance compares pages by term count, and a page that
+    loses more than a tenth of its terms falls outside the accepted band.
+
+    A page that fits is returned unchanged, byte for byte.
     """
 
     budget = MEMORY_ENTRY_TEXT_LIMIT - len(document_id.encode("utf-8")) - 1
-    encoded = text.encode("utf-8")
     if budget < 0:
         # The document identity alone does not fit into an entry, so no page
         # of this document can.  Cutting the tail instead of the head would
         # hide the problem, so the page is returned unchanged.
         return text
-    if len(encoded) <= budget:
+    if len(text.encode("utf-8")) <= budget:
         return text
-    candidate = text.rstrip()
-    if len(candidate.encode("utf-8")) <= budget:
-        return candidate
-    trimmed = encoded[:budget].decode("utf-8", errors="ignore")
+
+    # Whitespace carries no terms, so collapsing it frees bytes for free.
+    compacted = _compact_whitespace(text)
+    if len(compacted.encode("utf-8")) <= budget:
+        return compacted
+
+    # The page is still too long.  Drop the sparsest region - the fewest terms
+    # per byte, preferring the tail half where a running footer lives - and
+    # keep at least MIN_TERM_RETENTION of the terms.
+    total_terms = len(_TERM.findall(compacted))
+    allowed_loss = total_terms - math.ceil(total_terms * MIN_TERM_RETENTION)
+    work = compacted
+    lost = 0
+    while True:
+        needed = len(work.encode("utf-8")) - budget
+        if needed <= 0:
+            return work
+        window = _sparsest_region(work, needed)
+        if window is None:
+            break
+        start, end, terms = window
+        if lost + terms > allowed_loss:
+            break
+        work = work[:start] + "\n" + work[end:]
+        lost += terms
+
+    # Fall back to the head of the page: a page that cannot give up the terms
+    # it needs is shortened from the end, as before.
+    trimmed = work.encode("utf-8")[:budget].decode("utf-8", errors="ignore")
     newline = trimmed.rfind("\n")
     if newline >= 0 and len(trimmed) - newline <= 200:
         return trimmed[: newline + 1]
@@ -145,6 +188,67 @@ def fit_page_text(document_id: str, text: str) -> str:
     if space > 0:
         return trimmed[:space]
     return trimmed
+
+
+def _compact_whitespace(text: str) -> str:
+    """Collapse the whitespace of one page without changing its terms.
+
+    Runs of spaces become one space and every line loses its surrounding
+    whitespace.  The term multiset is identical afterwards, so this step frees
+    bytes for free.
+    """
+
+    return "\n".join(_SPACE_RUN.sub(" ", line).strip() for line in text.split("\n"))
+
+
+def _sparsest_region(text: str, needed_bytes: int) -> tuple[int, int, int] | None:
+    """Return the region that frees ``needed_bytes`` for the fewest terms.
+
+    The region is aligned to term boundaries, so the terms around it stay
+    separate.  The tail half is preferred, because a financial page repeats a
+    running footer there; when no tail region frees enough bytes, any region
+    is considered.
+    """
+
+    matches = list(_TERM.finditer(text))
+    count = len(matches)
+    if count == 0:
+        return None
+    starts = [match.start() for match in matches]
+    ends = [match.end() for match in matches]
+
+    def widest(terms: int, first: int) -> tuple[int, int]:
+        """Return the widest span of ``terms`` consecutive terms and its start."""
+
+        best_span = -1
+        best_index = first
+        for index in range(first, count - terms + 1):
+            span = ends[index + terms - 1] - starts[index]
+            if span > best_span:
+                best_span = span
+                best_index = index
+        return best_span, best_index
+
+    for tail_only in (True, False):
+        first = count // 2 if tail_only else 0
+        if first >= count:
+            continue
+        # The widest span grows with the number of terms, so the smallest term
+        # count that frees enough bytes is found with a binary search.
+        low, high = 1, count - first
+        while low < high:
+            middle = (low + high) // 2
+            if widest(middle, first)[0] >= needed_bytes:
+                high = middle
+            else:
+                low = middle + 1
+        span, index = widest(low, first)
+        if span >= needed_bytes:
+            return starts[index], ends[index + low - 1], low
+        if tail_only:
+            # No tail region is wide enough; look everywhere instead.
+            continue
+    return None
 
 
 def _validate_document_id(document_id: str) -> None:

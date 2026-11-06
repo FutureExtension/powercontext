@@ -1,11 +1,18 @@
-"""The page text has to fit into one memory entry."""
+"""The page text has to fit into one memory entry without losing its terms."""
 
 from __future__ import annotations
 
-from powercontext.sources.pdf_pages import MEMORY_ENTRY_TEXT_LIMIT, fit_page_text
+import re
+
+from powercontext.sources.pdf_pages import (
+    MEMORY_ENTRY_TEXT_LIMIT,
+    MIN_TERM_RETENTION,
+    fit_page_text,
+)
 
 DOC = "PEPSICO_2022_10K"
 BUDGET = MEMORY_ENTRY_TEXT_LIMIT - len(DOC) - 1
+TERM = re.compile(r"[A-Za-z]+|\d+")
 
 LINE = (
     "consolidated net revenue increased in 2022 compared with 2021 driven by organic volume growth "
@@ -17,12 +24,16 @@ def _page(lines: int) -> str:
     return "\n".join(f"note {number} {LINE}" for number in range(lines))
 
 
+def _terms(text: str) -> list[str]:
+    return TERM.findall(text)
+
+
 def test_page_that_fits_is_returned_unchanged() -> None:
     text = "Revenue 2022\n" * 10
     assert fit_page_text(DOC, text) == text
 
 
-def test_page_about_ten_percent_over_the_limit_keeps_most_tokens() -> None:
+def test_page_about_ten_percent_over_the_limit_keeps_most_terms() -> None:
     # A realistic financial page: 13 adjacent tokens per 155 bytes, which is
     # close to the density of the real pages that exceed the entry limit.
     lines = (BUDGET // len(_page(1)) * 100) // 100 + 1
@@ -35,7 +46,37 @@ def test_page_about_ten_percent_over_the_limit_keeps_most_tokens() -> None:
     fitted = fit_page_text(DOC, text)
     assert len(fitted.encode("utf-8")) <= BUDGET
     assert len((DOC + "\n" + fitted).encode("utf-8")) <= MEMORY_ENTRY_TEXT_LIMIT
-    assert fitted.count("revenue") >= int(text.count("revenue") * 0.85)
+    # The acceptance compares pages by term count, so the shortened page has to
+    # keep at least the accepted share of the terms.
+    kept = len(_terms(fitted)) / len(_terms(text))
+    assert kept >= MIN_TERM_RETENTION, kept
+
+
+def test_whitespace_is_collapsed_without_losing_a_term() -> None:
+    # The raw page is over the entry limit, but the padding is not terms, so
+    # collapsing it makes the page fit with every term intact.
+    text = "Revenue    2022\t\tincreased\n\n   with organic volume growth     \n" * 160
+    assert len(text.encode("utf-8")) > BUDGET
+    fitted = fit_page_text(DOC, text)
+    assert len((DOC + "\n" + fitted).encode("utf-8")) <= MEMORY_ENTRY_TEXT_LIMIT
+    assert _terms(fitted) == _terms(text)
+
+
+def test_a_sparse_region_is_dropped_instead_of_the_dense_terms() -> None:
+    # A page whose tail is dense and whose middle is a long, low density
+    # region: shedding the sparse region frees the bytes and costs far fewer
+    # terms than cutting the dense text.
+    sparse = "\n".join(f"sparsemarker{'x' * 140} {number}" for number in range(50))
+    dense = "\n".join(f"tail{number} revenue" for number in range(500))
+    text = f"{dense}\n{sparse}"
+    assert len(text.encode("utf-8")) > BUDGET
+    fitted = fit_page_text(DOC, text)
+    assert len((DOC + "\n" + fitted).encode("utf-8")) <= MEMORY_ENTRY_TEXT_LIMIT
+    kept = len(_terms(fitted)) / len(_terms(text))
+    assert kept >= MIN_TERM_RETENTION, kept
+    # The dense terms all survive; only the sparse region gives up the bytes.
+    assert fitted.count("tail") == text.count("tail")
+    assert fitted.count("sparsemarker") < text.count("sparsemarker")
 
 
 def test_far_over_long_page_is_trimmed_to_the_limit() -> None:
