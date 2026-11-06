@@ -13,6 +13,7 @@
  *   npm run models:info             人类可读报告
  *   npm run models:info -- --json   机器可读 JSON
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -64,6 +65,60 @@ function listFiles(dir) {
   return out;
 }
 
+/**
+ * 离线核对本地缓存与「固定 revision 清单」。
+ *
+ * data/model-manifest.json 由 scripts/fetch-models.mjs 生成，记录每个模型固定的 commit SHA
+ * 以及每个文件的字节数与 sha256。这里逐文件重算 sha256 并比对，
+ * 因此「revision 已固定」不是一句声明，而是**可当场验证**的事实。
+ */
+export function verifyPinnedRevision(model, files) {
+  const manifestFile = path.join(PATHS.data, 'model-manifest.json');
+  if (!fs.existsSync(manifestFile)) {
+    return { status: 'no-manifest', manifestFile, checked: 0, mismatched: [] };
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+  } catch {
+    return { status: 'unreadable-manifest', manifestFile, checked: 0, mismatched: [] };
+  }
+  const entry = manifest[model.id];
+  if (!entry) {
+    return { status: 'model-not-in-manifest', manifestFile, checked: 0, mismatched: [] };
+  }
+  const mismatched = [];
+  let checked = 0;
+  for (const [rel, meta] of Object.entries(entry.files || {})) {
+    const full = path.join(PATHS.modelCache, model.id, rel);
+    if (!fs.existsSync(full)) {
+      mismatched.push({ file: rel, reason: 'missing' });
+      continue;
+    }
+    checked += 1;
+    const bytes = fs.statSync(full).size;
+    if (meta.bytes !== undefined && bytes !== meta.bytes) {
+      mismatched.push({ file: rel, reason: 'size', expected: meta.bytes, actual: bytes });
+      continue;
+    }
+    if (meta.sha256) {
+      const got = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+      if (got !== meta.sha256) {
+        mismatched.push({ file: rel, reason: 'sha256', expected: meta.sha256, actual: got });
+      }
+    }
+  }
+  const revisionMatches = !entry.revision || entry.revision === model.revision;
+  return {
+    status: mismatched.length === 0 && revisionMatches ? 'verified' : 'mismatch',
+    manifestFile,
+    manifestRevision: entry.revision || null,
+    revisionMatches,
+    checked,
+    mismatched,
+  };
+}
+
 export function collectModelInfo(model) {
   const dir = path.join(PATHS.modelCache, model.id);
   const files = listFiles(dir);
@@ -108,6 +163,7 @@ export function collectModelInfo(model) {
     totalCacheBytes: [...files.values()].reduce((a, b) => a + b, 0),
     files: Object.fromEntries([...files.entries()].sort()),
     dtypes,
+    integrity: verifyPinnedRevision(model, files),
   };
 }
 
@@ -125,7 +181,16 @@ function printHuman(infos) {
     console.log(`■ ${info.id}`);
     console.log(`  说明      : ${info.label}`);
     console.log(`  仓库      : ${info.repo}`);
-    console.log(`  revision  : ${info.revision}${info.revisionPinned ? '' : '  (未固定到 commit SHA)'}`);
+    console.log(`  revision  : ${info.revision}${info.revisionPinned ? '  (已固定到 commit SHA)' : '  (未固定到 commit SHA)'}`);
+    const ig = info.integrity || {};
+    if (ig.status === 'verified') {
+      console.log(`  完整性    : ✔ 已核对 ${ig.checked} 个文件与固定 revision 清单（sha256 全部一致）`);
+    } else if (ig.status === 'mismatch') {
+      console.log(`  完整性    : ✗ 与固定 revision 清单不一致（${ig.mismatched.length} 个文件）`);
+      for (const mm of ig.mismatched) console.log(`              ${mm.file}: ${mm.reason}`);
+    } else {
+      console.log(`  完整性    : ⚠ ${ig.status}（${ig.manifestFile}）`);
+    }
     console.log(`  许可证    : ${info.license}`);
     console.log(`  向量维度  : ${info.dim}`);
     console.log(`  pooling   : ${info.pooling} / L2 normalize = ${info.normalize}`);

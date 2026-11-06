@@ -55,9 +55,9 @@ export const MODELS = [
     defaultDtype: 'q8',
     license: 'MIT',
     repo: 'https://huggingface.co/Xenova/bge-small-zh-v1.5',
-    revision: 'main',
-    revisionPinned: false,
-    note: 'BAAI bge-small-zh-v1.5，ONNX 权重由 Xenova 转换并发布到 HF。',
+    revision: '75c43b069aac4d136ba6bc1122f995fedcfd2781',
+    revisionPinned: true,
+    note: 'BAAI bge-small-zh-v1.5，ONNX 权重由 Xenova 转换并发布到 HF；revision 已固定到 commit SHA。',
   },
   {
     id: 'Xenova/all-MiniLM-L6-v2',
@@ -70,9 +70,9 @@ export const MODELS = [
     defaultDtype: 'q8',
     license: 'Apache-2.0',
     repo: 'https://huggingface.co/Xenova/all-MiniLM-L6-v2',
-    revision: 'main',
-    revisionPinned: false,
-    note: 'sentence-transformers/all-MiniLM-L6-v2，ONNX 权重由 Xenova 转换并发布到 HF。',
+    revision: '751bff37182d3f1213fa05d7196b954e230abad9',
+    revisionPinned: true,
+    note: 'sentence-transformers/all-MiniLM-L6-v2，ONNX 权重由 Xenova 转换并发布到 HF；revision 已固定到 commit SHA。',
   },
 ];
 

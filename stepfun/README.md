@@ -104,10 +104,10 @@ npm run verify:browser      # 浏览器端验证（16 条断言全绿，见 §9.
 | 维度 | **512** | 384 |
 | pooling / normalize | `cls` / L2 normalize=true | `mean` / L2 normalize=true |
 | 许可证 | **MIT** | Apache-2.0 |
-| revision | `main`（**未固定到 commit SHA**，见 §10 局限） | `main` |
+| revision | `75c43b06…`（**已固定到 commit SHA**） | `751bff37…`（**已固定到 commit SHA**） |
 | 默认精度 | `q8`（INT8 动态量化） | `q8` |
 
-> revision 说明：`scripts/fetch-models.mjs` 走的是 HF `resolve/main`，本地 `.model-cache/` 里没有记录 commit SHA，因此 `src/config.mjs` 里 `revisionPinned: false`。这是**如实标注**的已知局限，不是声称「已固定版本」。要严格固定，把 `revision` 改成具体 commit 并重新 `npm run fetch-models`。
+> revision 说明（2026-11-06 更新）：`src/config.mjs` 里的 `revision` **已固定到具体 commit SHA**：`Xenova/bge-small-zh-v1.5` = `75c43b069aac4d136ba6bc1122f995fedcfd2781`，`Xenova/all-MiniLM-L6-v2` = `751bff37182d3f1213fa05d7196b954e230abad9`。`scripts/fetch-models.mjs` 按这个 SHA 下载（不是会漂移的 `main`），并把每个文件的字节数与 **sha256** 写进 `data/model-manifest.json`；`scripts/model-info.mjs` 会**离线重算 sha256 并逐文件核对**本地缓存，当前输出为「✔ 已核对 7 个 / 6 个文件与固定 revision 清单（sha256 全部一致）」。因此「版本已固定」是可当场验证的事实，而不是一句声明。
 
 ---
 
@@ -361,7 +361,7 @@ FROM (
    * 仍未测：① **真实显卡**上的 WebGPU 性能（本机只有 SwiftShader 软件适配器）；② 浏览器侧的检索质量指标（验证语料只有 3 块）。
    * 过程中修掉了三个真实缺陷（模块说明符、seekdb 写入、验证脚本自身），逐条记录在 §9.4。
 
-2. **模型 revision 未固定到 commit SHA**（§3）。本地缓存来自 HF `resolve/main`，`.model-cache/` 内没有记录 commit。
+2. ~~**模型 revision 未固定到 commit SHA**（§3）~~ —— **已修复**（2026-11-06）：两个模型的 `revision` 都已固定到具体 commit SHA，下载脚本按 SHA 取文件并记录逐文件 sha256，`npm run models:info` 会离线核对本地缓存与该清单（当前全部一致）。
 
 3. **质量评测集偏小**：28 条查询 / 36 篇文档，Recall@5 的最小刻度就是 0.036，因此 §4.3 里量化前后的差异幅度**与噪声同量级**，只支持「未观察到质量下降」这一结论，不支持「INT8 更好」。
 
