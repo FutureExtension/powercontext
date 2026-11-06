@@ -1,0 +1,775 @@
+app:
+  description: 雾隐镇夜班档案室：和 AI 搭档「阿灯」一起翻卷宗、盘镇民、破奇案。卷宗与你的调查进度都存在 seekdb 里。
+  icon: 🕯️
+  icon_background: '#E4FBCC'
+  mode: advanced-chat
+  name: 雾隐镇 · 夜班档案室
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/openai:0.2.5@373362a028986aae53a7baf73a7f11991ba3c22c69eaf97d6cde048cfd4a9f98
+kind: app
+version: 0.4.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: '雾隐镇的雨又下了一夜。你推开夜班档案室的门，桌上那盏旧灯「啪」地亮了。
+
+
+      「新来的档案员？」阿灯把灯罩转了转，「卷宗都在我这儿——镇上的案子、物证、镇民的口供，一样没落。规矩就一条：你问什么我翻什么，翻到什么我记什么。」
+
+
+      在下面填好你的侦探代号和要接手的案子，就可以开始提问了。
+
+      可以这么问：「钟楼的雾钟到底是怎么坏的？」「谁把那袋灯油换掉了？」「查一下咸鱼仓的红盐账本」'
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: code
+      id: start-source-parse_intent-target
+      source: start
+      sourceHandle: source
+      target: parse_intent
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: tool
+      id: parse_intent-source-search_archive-target
+      source: parse_intent
+      sourceHandle: source
+      target: search_archive
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: tool
+      id: search_archive-source-read_progress-target
+      source: search_archive
+      sourceHandle: source
+      target: read_progress
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: code
+      id: read_progress-source-judge_close-target
+      source: read_progress
+      sourceHandle: source
+      target: judge_close
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: llm
+      id: judge_close-source-adeng_llm-target
+      source: judge_close
+      sourceHandle: source
+      target: adeng_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: code
+      id: adeng_llm-source-cite_evidence-target
+      source: adeng_llm
+      sourceHandle: source
+      target: cite_evidence
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: if-else
+      id: cite_evidence-source-if_can_close-target
+      source: cite_evidence
+      sourceHandle: source
+      target: if_can_close
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: tool
+      id: if_can_close-source-record_close-target
+      source: if_can_close
+      sourceHandle: 'true'
+      target: record_close
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: code
+      id: record_close-source-assemble_close-target
+      source: record_close
+      sourceHandle: source
+      target: assemble_close
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: answer
+      id: assemble_close-source-answer_close-target
+      source: assemble_close
+      sourceHandle: source
+      target: answer_close
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: tool
+      id: if_can_close-source-record_note-target
+      source: if_can_close
+      sourceHandle: 'false'
+      target: record_note
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: tool
+        targetType: code
+      id: record_note-source-assemble_note-target
+      source: record_note
+      sourceHandle: source
+      target: assemble_note
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: answer
+      id: assemble_note-source-answer_note-target
+      source: assemble_note
+      sourceHandle: source
+      target: answer_note
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: 填写侦探代号与要接手的案件
+        selected: false
+        variables:
+        - default: detective_001
+          description: 侦探代号。它是 seekdb 里 player_progress / investigation_log 的关联键，换一个代号就是一位新侦探。
+          label: 侦探代号
+          max_length: 64
+          options: []
+          required: true
+          type: text-input
+          variable: player_id
+        - default: CASE-2403
+          description: 本次要接手的卷宗（四个案子都已由 init_data.sql 灌进 seekdb 的 case_files 表）
+          label: 接手案件
+          max_length: 32
+          options:
+          - CASE-2401
+          - CASE-2402
+          - CASE-2403
+          - CASE-2404
+          required: true
+          type: select
+          variable: case_id
+        title: 开始
+        type: start
+      height: 90
+      id: start
+      position:
+        x: 30
+        y: 300
+      positionAbsolute:
+        x: 30
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code: "def main(question: str, case_id: str, player_id: str) -> dict:\n    import re\n\n    text = (question or \"\").strip()\n    close_words = [\"结案\", \"破案\", \"收网\", \"定罪\", \"就是他了\", \"凶手是\", \"可以结\"]\n    intent = \"close\" if any(word in text for word in close_words) else \"ask\"\n\n    quoted = re.findall(r\"[\\u300c\\u300e\\\"'《]([^\\u300d\\u300f\\\"'\\u300b]{1,24})[\\u300d\\u300f\\\"'\\u300b]\", text)\n    latin = re.findall(r\"[A-Za-z][A-Za-z0-9_\\-]{1,31}\", text)\n\n    hints = []\n    for item in quoted + latin:\n        item = item.strip()\n        if item and item not in hints:\n            hints.append(item)\n\n    return {\n        \"intent\": intent,\n        \"keywords_hint\": \",\".join(hints[:6]),\n        \"question\": text,\n    }\n"
+        code_language: python3
+        desc: 判断这一轮是「调查」还是「结案」，并抽出显式关键词（引号里的词、英文编号）
+        outputs:
+          intent:
+            children: null
+            type: string
+          keywords_hint:
+            children: null
+            type: string
+          question:
+            children: null
+            type: string
+        selected: false
+        variables:
+        - value_selector:
+          - sys
+          - query
+          variable: question
+        - value_selector:
+          - start
+          - case_id
+          variable: case_id
+        - value_selector:
+          - start
+          - player_id
+          variable: player_id
+        title: 解析提问
+        type: code
+      height: 54
+      id: parse_intent
+      position:
+        x: 330
+        y: 300
+      positionAbsolute:
+        x: 330
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        provider_id: b1f0c2a4-6d31-4a1e-9f77-0b2a5c9e0001
+        provider_name: 雾隐镇档案室工具
+        provider_type: api
+        tool_configurations: &id001 {}
+        desc: 调用 seekdb 工具服务：search_archive
+        tool_label: search_archive
+        tool_name: search_archive
+        tool_node_version: '2'
+        tool_parameters:
+          player_id:
+            type: mixed
+            value: '{{#start.player_id#}}'
+          case_id:
+            type: mixed
+            value: '{{#start.case_id#}}'
+          question:
+            type: mixed
+            value: '{{#parse_intent.question#}}'
+          keywords_hint:
+            type: mixed
+            value: '{{#parse_intent.keywords_hint#}}'
+          limit:
+            type: constant
+            value: 6
+        selected: false
+        title: 检索卷宗·物证·镇志
+        type: tool
+      height: 90
+      id: search_archive
+      position:
+        x: 630
+        y: 300
+      positionAbsolute:
+        x: 630
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        provider_id: b1f0c2a4-6d31-4a1e-9f77-0b2a5c9e0001
+        provider_name: 雾隐镇档案室工具
+        provider_type: api
+        tool_configurations: *id001
+        desc: 调用 seekdb 工具服务：get_player_progress
+        tool_label: get_player_progress
+        tool_name: get_player_progress
+        tool_node_version: '2'
+        tool_parameters:
+          player_id:
+            type: mixed
+            value: '{{#start.player_id#}}'
+          case_id:
+            type: mixed
+            value: '{{#start.case_id#}}'
+        selected: false
+        title: 读取调查进度
+        type: tool
+      height: 90
+      id: read_progress
+      position:
+        x: 930
+        y: 300
+      positionAbsolute:
+        x: 930
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code: "def main(intent: str, search_raw: str, progress_raw: str) -> dict:\n    import json\n\n    def load(raw):\n        raw = raw or \"\"\n        try:\n            return json.loads(raw)\n        except Exception:\n            begin = raw.find(\"{\")\n            end = raw.rfind(\"}\")\n            if begin >= 0 and end > begin:\n                try:\n                    return json.loads(raw[begin:end + 1])\n                except Exception:\n                    return {}\n            return {}\n\n    search = load(search_raw)\n    progress = load(progress_raw)\n\n    cases = search.get(\"cases\") or []\n    evidence = search.get(\"evidence\") or []\n    suspects = search.get(\"suspects\") or []\n    lore = search.get(\"lore\") or []\n    terms = (search.get(\"parsed\") or {}).get(\"terms\") or []\n\n    saved = progress.get(\"progress\") or {}\n    eliminated = saved.get(\"eliminated_suspects\") or []\n    cleared = saved.get(\"cleared_evidence\") or []\n\n    key_evidence = [row for row in evidence if int(row.get(\"weight\") or 0) >= 2]\n    suspects_left = [row for row in suspects if row.get(\"suspect_id\") not in eliminated]\n\n    culprit = \"\"\n    if suspects_left:\n        culprit = str(suspects_left[0].get(\"suspect_id\") or \"\")\n\n    evidence_ids = \",\".join([str(row.get(\"evidence_id\")) for row in key_evidence if row.get(\"evidence_id\")])\n    suspect_ids = \",\".join([str(row.get(\"suspect_id\")) for row in suspects_left if row.get(\"suspect_id\")])\n\n    can_close = \"true\" if (intent == \"close\" and len(key_evidence) >= 2 and len(suspects_left) >= 1) else \"false\"\n\n    def case_lines():\n        out = []\n        for row in cases:\n            out.append(\"- 【%s】%s / %s / %s / 严重度%s / 状态%s\\n  %s\" % (\n                row.get(\"case_id\"), row.get(\"title\"), row.get(\"crime_type\"),\n                row.get(\"location\"), row.get(\"severity\"), row.get(\"status\"),\n                (row.get(\"summary\") or \"\")[:160]))\n        return \"\\n\".join(out) or \"（卷宗里没有匹配的记录）\"\n\n    def evidence_lines():\n        out = []\n        for row in evidence:\n            out.append(\"- 【%s】%s（%s，关键度%s）%s\" % (\n                row.get(\"evidence_id\"), row.get(\"name\"), row.get(\"location\"),\n                row.get(\"weight\"), (row.get(\"detail\") or \"\")[:180]))\n        return \"\\n\".join(out) or \"（没有翻到相关物证）\"\n\n    def suspect_lines():\n        out = []\n        for row in suspects:\n            mark = \"（已排除）\" if row.get(\"suspect_id\") in eliminated else \"\"\n            out.append(\"- 【%s】%s（%s，绰号%s）%s\\n  动机：%s；常去：%s；自称：%s\" % (\n                row.get(\"suspect_id\"), row.get(\"name\"), row.get(\"occupation\"),\n                row.get(\"alias\"), mark, row.get(\"motive\"), row.get(\"hideout\"),\n                row.get(\"alibi\")))\n        return \"\\n\".join(out) or \"（没有匹配的镇民）\"\n\n    def lore_lines():\n        out = []\n        for row in lore:\n            out.append(\"- 【%s】%s：%s\" % (\n                row.get(\"lore_id\"), row.get(\"topic\"), row.get(\"content\")))\n        return \"\\n\".join(out) or \"（镇志里没有相关记载）\"\n\n    prompt = (\n        \"【侦探代号】%s\\n\"\n        \"【接手案件】%s\\n\"\n        \"【侦探这一轮的问话】%s\\n\"\n        \"【本次检索用到的关键词】%s\\n\\n\"\n        \"【卷宗（seekdb 表 case_files）】\\n%s\\n\\n\"\n        \"【物证（seekdb 表 evidence）】\\n%s\\n\\n\"\n        \"【镇民（seekdb 表 suspects）】\\n%s\\n\\n\"\n        \"【镇志（seekdb 表 town_lore）】\\n%s\\n\\n\"\n        \"【这个侦探此前的调查进度（seekdb 表 player_progress）】\\n\"\n        \"已掌握物证：%s\\n已排除镇民：%s\\n已问轮次：%s\\n调查笔记：%s\\n\\n\"\n        \"【结案条件】需要同时满足：侦探明确说了结案（当前意图=%s）、本轮翻到关键物证不少于 2 条（当前 %s 条）、\"\n        \"还有未被排除的镇民（当前 %s 人）。当前判定：%s\\n\\n\"\n        \"【规矩】\\n\"\n        \"1) 只能引用上面列出的卷宗、物证、镇志内容；没有依据就直接说卷宗里查不到，不要编造编号、日期或人名。\\n\"\n        \"2) 提到物证或镇民时，请用【EV-xxxx】【SUS-xx】的方括号写法标注编号，方便归档。\\n\"\n        \"3) 语气是阿灯——雾隐镇夜班档案室里那盏嘴碎但靠谱的老灯；两三段、300 字以内。\\n\"\n        \"4) 如果某人已经被排除，就直说我们已经排除过谁，不要重复怀疑。\"\n    ) % (\n        search.get(\"player_id\") or \"\",\n        search.get(\"case_id\") or \"\",\n        search.get(\"question\") or \"\",\n        \"\
+          、\".join(terms) if terms else \"（无）\",\n        case_lines(), evidence_lines(), suspect_lines(), lore_lines(),\n        \"、\".join(cleared) if cleared else \"（无）\",\n        \"、\".join(eliminated) if eliminated else \"（无）\",\n        saved.get(\"turns\") if saved.get(\"turns\") is not None else 0,\n        saved.get(\"notes\") or \"（无）\",\n        intent, len(key_evidence), len(suspects_left),\n        \"可以结案\" if can_close == \"true\" else \"还不能结案\",\n    )\n\n    note = \"结案对象：%s\" % culprit if can_close == \"true\" else \"\"\n\n    return {\n        \"can_close\": can_close,\n        \"prompt\": prompt,\n        \"evidence_ids\": evidence_ids,\n        \"suspect_ids\": suspect_ids,\n        \"culprit\": culprit,\n        \"note\": note,\n    }\n"
+        code_language: python3
+        desc: 把检索结果和历史进度拼成给阿灯的提示词，并判断能不能结案
+        outputs:
+          can_close:
+            children: null
+            type: string
+          culprit:
+            children: null
+            type: string
+          evidence_ids:
+            children: null
+            type: string
+          note:
+            children: null
+            type: string
+          prompt:
+            children: null
+            type: string
+          suspect_ids:
+            children: null
+            type: string
+        selected: false
+        variables:
+        - value_selector:
+          - parse_intent
+          - intent
+          variable: intent
+        - value_selector:
+          - search_archive
+          - text
+          variable: search_raw
+        - value_selector:
+          - read_progress
+          - text
+          variable: progress_raw
+        title: 判定结案条件
+        type: code
+      height: 54
+      id: judge_close
+      position:
+        x: 1230
+        y: 300
+      positionAbsolute:
+        x: 1230
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: 阿灯根据卷宗与物证给出推理
+        memory:
+          query_prompt_template: '{{#sys.query#}} {{#sys.files#}}'
+          window:
+            enabled: true
+            size: 6
+        model:
+          completion_params:
+            temperature: 0.4
+            top_p: 0.9
+          mode: chat
+          name: gpt-4o-mini
+          provider: langgenius/openai/openai
+        prompt_template:
+        - id: adeng-system
+          role: system
+          text: '你是「阿灯」——雾隐镇夜班档案室里那盏会说话的老灯。
+
+            镇上的旧卷宗、物证、镇民的口供都存在镇档案室的数据库里，你负责替侦探翻出来。
+
+            说话风格：温和、有点碎嘴、爱打比方，但从不编造。
+
+            你只能依据「档案室刚翻出来的东西」回答；查不到就直接说卷宗里没有这一条。
+
+            每次回答控制在 300 字以内，最多三段。'
+        - id: adeng-user
+          role: user
+          text: '{{#judge_close.prompt#}}'
+        selected: false
+        title: 阿灯·推理
+        type: llm
+        variables: []
+        vision:
+          enabled: false
+      height: 90
+      id: adeng_llm
+      position:
+        x: 1530
+        y: 300
+      positionAbsolute:
+        x: 1530
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code: "def main(reply: str, fallback_evidence: str, fallback_suspects: str, fallback_culprit: str) -> dict:\n    import re\n\n    text = reply or \"\"\n\n    evidence_ids = []\n    for item in re.findall(r\"EV-\\d{4}\", text):\n        if item not in evidence_ids:\n            evidence_ids.append(item)\n\n    suspect_ids = []\n    for item in re.findall(r\"SUS-\\d{2}\", text):\n        if item not in suspect_ids:\n            suspect_ids.append(item)\n\n    if not evidence_ids:\n        evidence_ids = [x.strip() for x in (fallback_evidence or \"\").split(\",\") if x.strip()]\n    if not suspect_ids:\n        suspect_ids = [x.strip() for x in (fallback_suspects or \"\").split(\",\") if x.strip()]\n\n    culprit = \"\"\n    marked = re.search(r\"真凶[：: ]*【?(SUS-\\d{2})】?\", text)\n    if marked:\n        culprit = marked.group(1)\n    elif suspect_ids:\n        culprit = suspect_ids[0]\n    else:\n        culprit = (fallback_culprit or \"\").strip()\n\n    return {\n        \"evidence_ids\": \",\".join(evidence_ids[:8]),\n        \"suspect_ids\": \",\".join(suspect_ids[:8]),\n        \"culprit\": culprit,\n    }\n"
+        code_language: python3
+        desc: 从阿灯的回答里抽出【EV-xxxx】【SUS-xx】，用于写回 seekdb
+        outputs:
+          culprit:
+            children: null
+            type: string
+          evidence_ids:
+            children: null
+            type: string
+          suspect_ids:
+            children: null
+            type: string
+        selected: false
+        variables:
+        - value_selector:
+          - adeng_llm
+          - text
+          variable: reply
+        - value_selector:
+          - judge_close
+          - evidence_ids
+          variable: fallback_evidence
+        - value_selector:
+          - judge_close
+          - suspect_ids
+          variable: fallback_suspects
+        - value_selector:
+          - judge_close
+          - culprit
+          variable: fallback_culprit
+        title: 抽取引用编号
+        type: code
+      height: 54
+      id: cite_evidence
+      position:
+        x: 1830
+        y: 300
+      positionAbsolute:
+        x: 1830
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: is
+            id: 6b6c3a2e-9c41-4f0a-9a2f-0d1c7f5e1001
+            value: 'true'
+            varType: string
+            variable_selector:
+            - judge_close
+            - can_close
+          id: 'true'
+          logical_operator: and
+        desc: 侦探说了结案 且 关键物证>=2 且 还有未排除的镇民
+        selected: false
+        title: 可以结案吗
+        type: if-else
+      height: 126
+      id: if_can_close
+      position:
+        x: 2130
+        y: 300
+      positionAbsolute:
+        x: 2130
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        provider_id: b1f0c2a4-6d31-4a1e-9f77-0b2a5c9e0001
+        provider_name: 雾隐镇档案室工具
+        provider_type: api
+        tool_configurations: *id001
+        desc: 调用 seekdb 工具服务：record_progress
+        tool_label: record_progress
+        tool_name: record_progress
+        tool_node_version: '2'
+        tool_parameters:
+          player_id:
+            type: mixed
+            value: '{{#start.player_id#}}'
+          case_id:
+            type: mixed
+            value: '{{#start.case_id#}}'
+          action:
+            type: constant
+            value: close
+          question:
+            type: mixed
+            value: '{{#parse_intent.question#}}'
+          reply:
+            type: mixed
+            value: '{{#adeng_llm.text#}}'
+          evidence_ids:
+            type: mixed
+            value: '{{#cite_evidence.evidence_ids#}}'
+          suspect_ids:
+            type: mixed
+            value: '{{#cite_evidence.suspect_ids#}}'
+          notes:
+            type: mixed
+            value: '{{#judge_close.note#}}'
+          culprit:
+            type: mixed
+            value: '{{#cite_evidence.culprit#}}'
+        selected: false
+        title: 写回·结案
+        type: tool
+      height: 90
+      id: record_close
+      position:
+        x: 2430
+        y: 130
+      positionAbsolute:
+        x: 2430
+        y: 130
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        provider_id: b1f0c2a4-6d31-4a1e-9f77-0b2a5c9e0001
+        provider_name: 雾隐镇档案室工具
+        provider_type: api
+        tool_configurations: *id001
+        desc: 调用 seekdb 工具服务：record_progress
+        tool_label: record_progress
+        tool_name: record_progress
+        tool_node_version: '2'
+        tool_parameters:
+          player_id:
+            type: mixed
+            value: '{{#start.player_id#}}'
+          case_id:
+            type: mixed
+            value: '{{#start.case_id#}}'
+          action:
+            type: constant
+            value: note
+          question:
+            type: mixed
+            value: '{{#parse_intent.question#}}'
+          reply:
+            type: mixed
+            value: '{{#adeng_llm.text#}}'
+          evidence_ids:
+            type: mixed
+            value: '{{#cite_evidence.evidence_ids#}}'
+          suspect_ids:
+            type: mixed
+            value: '{{#cite_evidence.suspect_ids#}}'
+          notes:
+            type: mixed
+            value: '{{#judge_close.note#}}'
+          culprit:
+            type: mixed
+            value: '{{#cite_evidence.culprit#}}'
+        selected: false
+        title: 写回·线索笔记
+        type: tool
+      height: 90
+      id: record_note
+      position:
+        x: 2430
+        y: 470
+      positionAbsolute:
+        x: 2430
+        y: 470
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code: "def main(reply: str, record_raw: str, evidence_ids: str, suspect_ids: str, culprit: str) -> dict:\n    import json\n\n    def load(raw):\n        raw = raw or \"\"\n        try:\n            return json.loads(raw)\n        except Exception:\n            return {}\n\n    record = load(record_raw)\n    written = record.get(\"written\") or {}\n\n    lines = []\n    lines.append((reply or \"\").strip())\n    lines.append(\"\")\n    lines.append(\"—— 阿灯在档案室的记录 ——\")\n    lines.append(\"- 采纳的关键物证：%s\" % (evidence_ids or \"（无）\"))\n    lines.append(\"- 结案对象：%s\" % (culprit or \"（待定）\"))\n    lines.append(\"- 仍未排除的镇民：%s\" % (suspect_ids or \"（无）\"))\n    lines.append(\"- 已写入 seekdb：player_progress %s 行、investigation_log %s 行、case_files %s 行\"\n                 % (written.get(\"player_progress\", 0), written.get(\"investigation_log\", 0),\n                    written.get(\"case_files\", 0)))\n    lines.append(\"- 案卷状态：%s（这一条也写回了 seekdb 的 case_files 表）\"\n                 % (record.get(\"case_status\") or \"open\"))\n    lines.append(\"- 你的调查进度存在 seekdb 的 player_progress 表里，下次开新会话阿灯还记得。\")\n    return {\"report\": \"\\n\".join(lines)}\n"
+        code_language: python3
+        desc: 把阿灯的回答和 seekdb 写回结果合成最终回复
+        outputs:
+          report:
+            children: null
+            type: string
+        selected: false
+        variables:
+        - value_selector:
+          - adeng_llm
+          - text
+          variable: reply
+        - value_selector:
+          - record_close
+          - text
+          variable: record_raw
+        - value_selector:
+          - cite_evidence
+          - evidence_ids
+          variable: evidence_ids
+        - value_selector:
+          - cite_evidence
+          - suspect_ids
+          variable: suspect_ids
+        - value_selector:
+          - cite_evidence
+          - culprit
+          variable: culprit
+        title: 组装结案报告
+        type: code
+      height: 54
+      id: assemble_close
+      position:
+        x: 2730
+        y: 130
+      positionAbsolute:
+        x: 2730
+        y: 130
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        code: "def main(reply: str, record_raw: str, evidence_ids: str, suspect_ids: str, culprit: str) -> dict:\n    import json\n\n    def load(raw):\n        raw = raw or \"\"\n        try:\n            return json.loads(raw)\n        except Exception:\n            return {}\n\n    record = load(record_raw)\n    written = record.get(\"written\") or {}\n\n    lines = []\n    lines.append((reply or \"\").strip())\n    lines.append(\"\")\n    lines.append(\"—— 阿灯在档案室的记录 ——\")\n    lines.append(\"- 这一轮采纳的关键物证：%s\" % (evidence_ids or \"（无）\"))\n    lines.append(\"- 还没排除的镇民：%s\" % (suspect_ids or \"（无）\"))\n    if culprit:\n        lines.append(\"- 目前嫌疑最大的是：%s（但还得再问几句才算数）\" % culprit)\n    lines.append(\"- 已写入 seekdb：player_progress %s 行、investigation_log %s 行\"\n                 % (written.get(\"player_progress\", 0), written.get(\"investigation_log\", 0)))\n    lines.append(\"- 案卷状态：%s（还没结案，卷宗继续开着）\" % (record.get(\"case_status\") or \"open\"))\n    lines.append(\"- 想结案的话说一声「结案」，条件够了阿灯就给你写结案陈词。\")\n    return {\"report\": \"\\n\".join(lines)}\n"
+        code_language: python3
+        desc: 把阿灯的回答和 seekdb 写回结果合成最终回复
+        outputs:
+          report:
+            children: null
+            type: string
+        selected: false
+        variables:
+        - value_selector:
+          - adeng_llm
+          - text
+          variable: reply
+        - value_selector:
+          - record_note
+          - text
+          variable: record_raw
+        - value_selector:
+          - cite_evidence
+          - evidence_ids
+          variable: evidence_ids
+        - value_selector:
+          - cite_evidence
+          - suspect_ids
+          variable: suspect_ids
+        - value_selector:
+          - cite_evidence
+          - culprit
+          variable: culprit
+        title: 组装调查简报
+        type: code
+      height: 54
+      id: assemble_note
+      position:
+        x: 2730
+        y: 470
+      positionAbsolute:
+        x: 2730
+        y: 470
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#assemble_close.report#}}'
+        desc: 结案分支的回复
+        selected: false
+        variables: []
+        title: 回答·结案
+        type: answer
+      height: 90
+      id: answer_close
+      position:
+        x: 3030
+        y: 130
+      positionAbsolute:
+        x: 3030
+        y: 130
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        answer: '{{#assemble_note.report#}}'
+        desc: 继续调查分支的回复
+        selected: false
+        variables: []
+        title: 回答·继续调查
+        type: answer
+      height: 90
+      id: answer_note
+      position:
+        x: 3030
+        y: 470
+      positionAbsolute:
+        x: 3030
+        y: 470
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.6

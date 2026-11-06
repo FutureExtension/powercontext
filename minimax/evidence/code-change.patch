@@ -1,0 +1,63 @@
+diff --git a/src/orders/__init__.py b/src/orders/__init__.py
+index 3ae175e..2264ecf 100644
+--- a/src/orders/__init__.py
++++ b/src/orders/__init__.py
+@@ -1,5 +1,11 @@
+ """Order helpers of the sample business project."""
+ 
+-from orders.filters import Order, filter_by_amount, filter_by_status, sum_by_currency
++from orders.filters import Order, filter_by_amount, filter_by_country, filter_by_status, sum_by_currency
+ 
+-__all__ = ("Order", "filter_by_amount", "filter_by_status", "sum_by_currency")
++__all__ = (
++    "Order",
++    "filter_by_amount",
++    "filter_by_country",
++    "filter_by_status",
++    "sum_by_currency",
++)
+diff --git a/src/orders/filters.py b/src/orders/filters.py
+index 6b00562..970cb21 100644
+--- a/src/orders/filters.py
++++ b/src/orders/filters.py
+@@ -21,6 +21,40 @@ class Order:
+     currency: str
+ 
+ 
++def _normalize_country(value: str | None) -> str | None:
++    """Return the comparable form of a country code.
++
++    Textual comparisons ignore case and surrounding whitespace, so ``" de "``
++    and ``"DE"`` normalise to the same value.  ``None`` is not a country and
++    stays ``None`` so that it never matches a requested country.
++    """
++
++    if value is None:
++        return None
++    return value.strip().casefold()
++
++
++def filter_by_country(orders: Iterable[Order], country: str) -> list[Order]:
++    """Return the orders whose country matches ``country``.
++
++    The comparison ignores case and surrounding whitespace on both sides, so
++    ``filter_by_country(orders, " de ")`` keeps the orders stored as ``"DE"``
++    and ``"de"``.  The input is never modified and the result keeps the order
++    of the input.  An unknown country yields an empty list; ``None`` is not
++    accepted as the requested country.
++    """
++
++    if country is None:
++        raise TypeError("country must be a string, not None")
++
++    wanted = _normalize_country(country)
++    return [
++        order
++        for order in orders
++        if _normalize_country(order.country) == wanted
++    ]
++
++
+ def filter_by_status(orders: Iterable[Order], status: str) -> list[Order]:
+     """Return the orders whose status matches ``status`` exactly."""
+ 

@@ -1,0 +1,77 @@
+:root {
+  --ink: #16202a;
+  --muted: #5a6b7c;
+  --line: #dfe6ec;
+  --bg: #f6f8fa;
+  --card: #ffffff;
+  --accent: #1f6feb;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 15px/1.7 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+header {
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  padding: 28px 24px 22px;
+}
+header h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: .5px; }
+header h1 span { font-size: 15px; color: var(--muted); font-weight: 400; letter-spacing: 1px; }
+.tagline { margin: 0; color: var(--muted); max-width: 760px; }
+main { max-width: 900px; margin: 0 auto; padding: 24px; }
+.panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+}
+.panel h2 { margin: 0 0 12px; font-size: 16px; }
+label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+input[type=text] {
+  flex: 1 1 320px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 15px;
+}
+select {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  font-size: 15px;
+}
+button {
+  padding: 9px 20px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+}
+button:hover { background: #1a5fd0; }
+.hint { margin-top: 10px; color: var(--muted); font-size: 13px; min-height: 20px; }
+.hits { margin: 0; padding-left: 20px; }
+.hits li { margin-bottom: 14px; }
+.hits .title { font-weight: 600; }
+.hits .meta { color: var(--muted); font-size: 13px; margin: 2px 0 4px; }
+.hits .snippet { color: #33424f; }
+.hits .actions { margin-top: 6px; }
+.hits .actions button {
+  background: #eef2f6;
+  color: var(--ink);
+  padding: 4px 12px;
+  font-size: 13px;
+  margin-right: 8px;
+}
+.progress { list-style: none; margin: 0; padding: 0; }
+.progress li { padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.progress li:last-child { border-bottom: 0; }
+.bar { display: inline-block; width: 160px; height: 8px; background: #eef2f6; border-radius: 4px; vertical-align: middle; margin: 0 10px; }
+.bar span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }

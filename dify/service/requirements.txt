@@ -1,0 +1,10 @@
+# 雾隐镇 · 夜班档案室 —— 自定义工具服务依赖
+# 安装：pip install -r requirements.txt
+# 验证：python -m py_compile app.py smoke_test.py
+
+# Web 框架（暴露 OpenAPI 规范给 Dify「自定义工具」使用）
+fastapi>=0.110,<1.0
+uvicorn>=0.27,<1.0
+
+# MySQL 协议驱动，用它连 seekdb（默认 127.0.0.1:2881）
+PyMySQL>=1.1,<2.0

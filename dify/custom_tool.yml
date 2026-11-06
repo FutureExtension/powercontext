@@ -1,0 +1,237 @@
+openapi: 3.0.1
+info:
+  title: 雾隐镇 · 夜班档案室 工具服务
+  description: |
+    《雾隐镇 · 夜班档案室》的 seekdb 工具后端。
+
+    所有查询与写回都通过 MySQL 协议落在 seekdb（默认 127.0.0.1:2881）上。
+    每个接口的响应里都带 sql_trace 字段，记录真实执行的 SQL 与返回行数，
+    方便在 Dify 的节点执行记录里逐条核对"到底查了哪张表、跑了什么 SQL"。
+
+    导入到 Dify 时请把 servers[0].url 改成你的工具服务地址：
+      * Dify 在 Docker 里跑： http://host.docker.internal:8100
+        （Linux 上需要给 api 容器加 extra_hosts: host.docker.internal:host-gateway）
+      * Dify 直接跑在本机：   http://127.0.0.1:8100
+  version: 1.0.0
+servers:
+- url: http://host.docker.internal:8100
+  description: Dify 运行在 Docker 中时使用（Linux 需配置 extra_hosts 映射 host.docker.internal）
+- url: http://127.0.0.1:8100
+  description: Dify 与工具服务运行在同一台机器上时使用
+paths:
+  /search_archive:
+    post:
+      operationId: search_archive
+      summary: 检索卷宗、物证、镇民与镇志
+      description: >-
+        在 seekdb 上做一次混合检索：先按卷宗编号/地点做结构化过滤，
+        再用关键词做全文(LIKE/MATCH)匹配，最后按命中权重排序。
+        涉及表：case_files、evidence、suspects、town_lore。
+        返回的 sql_trace 里是真实执行的 SQL。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                player_id:
+                  type: string
+                  description: 侦探代号（对应 seekdb 里 player_progress.player_id）
+                  default: detective_001
+                case_id:
+                  type: string
+                  description: 案件编号，例如 CASE-2403；留空表示不限案件
+                  default: CASE-2403
+                question:
+                  type: string
+                  description: 侦探这一轮的提问原文，服务端会据此抽取检索词
+                keywords_hint:
+                  type: string
+                  description: 逗号分隔的显式关键词，例如 "雾钟,铜锤"
+                limit:
+                  type: integer
+                  description: 每类结果最多返回多少条
+                  default: 6
+              required:
+              - player_id
+              - case_id
+              - question
+      responses:
+        '200':
+          description: 检索结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  parsed:
+                    type: object
+                    description: 服务端从问句里抽出的检索词、地点与人名
+                  strategy:
+                    type: string
+                    description: 检索策略，fulltext+like 表示全文索引可用，like 表示自动退回 LIKE
+                  cases:
+                    type: array
+                    items:
+                      type: object
+                  evidence:
+                    type: array
+                    items:
+                      type: object
+                  suspects:
+                    type: array
+                    items:
+                      type: object
+                  lore:
+                    type: array
+                    items:
+                      type: object
+                  hit_counts:
+                    type: object
+                  sql_trace:
+                    type: array
+                    items:
+                      type: object
+                required:
+                - ok
+                - cases
+                - evidence
+                - suspects
+                - lore
+  /get_player_progress:
+    post:
+      operationId: get_player_progress
+      summary: 读取该侦探在该案上的调查进度（跨会话记忆）
+      description: >-
+        读取 seekdb 的 player_progress 表（已掌握物证、已排除镇民、调查笔记、轮次）
+        以及 investigation_log 表最近 5 条问答日志。
+        这就是"换个会话阿灯还记得你"的记忆来源。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                player_id:
+                  type: string
+                  description: 侦探代号
+                  default: detective_001
+                case_id:
+                  type: string
+                  description: 案件编号，留空表示读取该侦探的全部案件进度
+              required:
+              - player_id
+      responses:
+        '200':
+          description: 调查进度
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  found:
+                    type: boolean
+                  progress:
+                    type: object
+                    description: player_progress 的一行（cleared_evidence / eliminated_suspects / notes / turns）
+                  all_progress:
+                    type: array
+                    items:
+                      type: object
+                  last_logs:
+                    type: array
+                    items:
+                      type: object
+                  log_count:
+                    type: integer
+                  sql_trace:
+                    type: array
+                    items:
+                      type: object
+                required:
+                - ok
+                - progress
+  /record_progress:
+    post:
+      operationId: record_progress
+      summary: 写回调查进度与问答日志（必要时结案）
+      description: >-
+        写 seekdb：
+        1) UPSERT player_progress（已掌握物证、已排除镇民、笔记、轮次）；
+        2) INSERT investigation_log（这一轮的提问与阿灯的回答）；
+        3) 当 action=close 时 UPDATE case_files，把案卷状态改成 closed。
+        返回的 written 字段说明三张表分别写入了多少行。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                player_id:
+                  type: string
+                  description: 侦探代号
+                  default: detective_001
+                case_id:
+                  type: string
+                  description: 案件编号
+                  default: CASE-2403
+                action:
+                  type: string
+                  description: note=只记录一问一答；close=同时结案（更新 case_files.status）
+                  default: note
+                question:
+                  type: string
+                  description: 侦探这一轮的提问原文
+                reply:
+                  type: string
+                  description: 阿灯这一轮的回答，会原样写进 investigation_log
+                evidence_ids:
+                  type: string
+                  description: 逗号分隔的已掌握物证编号，例如 EV-0301,EV-0302
+                suspect_ids:
+                  type: string
+                  description: 逗号分隔的已排除镇民编号，例如 SUS-08
+                notes:
+                  type: string
+                  description: 补充的调查笔记
+                culprit:
+                  type: string
+                  description: 结案时给出的真凶编号，例如 SUS-05
+              required:
+              - player_id
+              - case_id
+              - action
+      responses:
+        '200':
+          description: 写回结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  action:
+                    type: string
+                  progress:
+                    type: object
+                  case_status:
+                    type: string
+                    description: 结案后为 closed，否则为 open
+                  written:
+                    type: object
+                    description: player_progress / investigation_log / case_files 各写入了多少行
+                  sql_trace:
+                    type: array
+                    items:
+                      type: object
+                required:
+                - ok
+                - written

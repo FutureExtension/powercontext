@@ -1,0 +1,20 @@
+...FF                                                                    [100%]
+================================== FAILURES ===================================
+_______________ test_filter_by_country_ignores_case_and_padding _______________
+
+    def test_filter_by_country_ignores_case_and_padding() -> None:
+>       from orders.filters import filter_by_country
+E       ImportError: cannot import name 'filter_by_country' from 'orders.filters' (C:\codex-work\ob-00001\work\_verify_before_01\tests\..\src\orders\filters.py). Did you mean: 'filter_by_amount'?
+
+..\powercontext\minimax\sample_project\tests\test_filters.py:46: ImportError
+______________ test_filter_by_country_does_not_mutate_the_input _______________
+
+    def test_filter_by_country_does_not_mutate_the_input() -> None:
+>       from orders.filters import filter_by_country
+E       ImportError: cannot import name 'filter_by_country' from 'orders.filters' (C:\codex-work\ob-00001\work\_verify_before_01\tests\..\src\orders\filters.py). Did you mean: 'filter_by_amount'?
+
+..\powercontext\minimax\sample_project\tests\test_filters.py:54: ImportError
+=========================== short test summary info ===========================
+FAILED tests/test_filters.py::test_filter_by_country_ignores_case_and_padding
+FAILED tests/test_filters.py::test_filter_by_country_does_not_mutate_the_input
+2 failed, 3 passed in 0.81s

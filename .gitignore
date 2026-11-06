@@ -1,0 +1,14 @@
+# Python build artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Runtime logs
+*.log
+# Test logs that are submission evidence for the MiniMax task
+!minimax/evidence/*.log
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+

@@ -1,0 +1,19 @@
+{
+  "Xenova/bge-small-zh-v1.5": {
+    "config.json": 716,
+    "tokenizer.json": 439125,
+    "tokenizer_config.json": 367,
+    "special_tokens_map.json": 125,
+    "onnx/model.onnx": 94851877,
+    "onnx/model_fp16.onnx": 47497427,
+    "onnx/model_quantized.onnx": 24010842
+  },
+  "Xenova/all-MiniLM-L6-v2": {
+    "config.json": 650,
+    "tokenizer_config.json": 366,
+    "special_tokens_map.json": 125,
+    "onnx/model.onnx": 90387606,
+    "onnx/model_fp16.onnx": 45297825,
+    "onnx/model_quantized.onnx": 22972370
+  }
+}

@@ -1,0 +1,17 @@
+# Runtime dependencies and model caches
+node_modules/
+.model-cache/
+
+# Generated local runtime output
+data/*.out
+data/*.err
+data/*.db
+data/*.db-*
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+
+# Headless browser profiles and captured logs are local run artifacts
+data/.browser-profile*/
+data/*.log

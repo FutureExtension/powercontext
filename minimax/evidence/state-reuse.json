@@ -1,0 +1,31 @@
+{
+  "task": "为订单筛选增加按国家过滤的能力",
+  "scope": "sdd-task",
+  "specs": [
+    "SPEC-ORDER-FILTERING",
+    "SPEC-CURRENCY-ROUNDING",
+    "SPEC-CHANGE-REQUEST"
+  ],
+  "symbols": [
+    "src/orders/filters.py:filter_by_status",
+    "src/orders/filters.py:filter_by_amount",
+    "src/orders/filters.py:filter_by_country",
+    "src/orders/filters.py:sum_by_currency",
+    "src/orders/filters.py:_normalize_country"
+  ],
+  "tests": [
+    "tests/test_filters.py:test_filter_by_status_keeps_exact_matches",
+    "tests/test_filters.py:test_filter_by_amount_uses_a_lower_bound",
+    "tests/test_filters.py:test_sum_by_currency_reports_cents_and_uses_other",
+    "tests/test_filters.py:test_filter_by_country_ignores_case_and_padding",
+    "tests/test_filters.py:test_filter_by_country_does_not_mutate_the_input"
+  ],
+  "done": [],
+  "todo": [
+    "按规格实现修改",
+    "运行目标功能测试",
+    "运行回归测试"
+  ],
+  "verification": [],
+  "proposal": ""
+}

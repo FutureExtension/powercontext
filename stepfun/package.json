@@ -1,0 +1,39 @@
+﻿{
+  "name": "stepfun-seekdb-kb",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OceanBase 大赛 2026 生态赛题「阶跃星辰」：浏览器端向量化 + seekdb 混合检索迷你知识库",
+  "main": "server.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "serve": "node server.mjs",
+    "seekdb": "node scripts/start-seekdb.mjs",
+    "fetch-models": "node scripts/fetch-models.mjs",
+    "verify": "node scripts/verify.mjs",
+    "verify:browser": "node scripts/verify-browser.mjs",
+    "bench": "node scripts/bench.mjs",
+    "models:info": "node scripts/model-info.mjs"
+  },
+  "keywords": [
+    "seekdb",
+    "oceanbase",
+    "transformers.js",
+    "onnxruntime-web",
+    "webgpu",
+    "hybrid-search",
+    "rag"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "@oceanbase/seekdb-node-win32-x64": "^1.4.0",
+    "@seekdb/js-bindings": "^1.4.0",
+    "express": "^4.22.3",
+    "seekdb": "^1.4.0"
+  }
+}
