@@ -33,6 +33,11 @@ PDF_PAGE_SOURCE_NAME = "pdf-page"
 PDF_PAGE_SOURCE_VERSION = "1"
 _PAIR_CANDIDATES = 100
 _RRF_K = 60.0
+# A rare term that occurs in the document is a precise signal: the top few
+# pages of its single term query are promoted on top of the pair fusion.
+_SINGLE_TERM_MIN_IDF = 1.0
+_SINGLE_TERM_WEIGHT = 2.0
+_SINGLE_TERM_CANDIDATES = 3
 
 # A captured page becomes one memory entry whose text is the document identity
 # followed by the page text, and a memory entry holds at most 8192 UTF-8 bytes.
@@ -247,10 +252,15 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
     terms = tuple(analyze_fts_query(question).split())
     if not terms:
         return ()
-    weights = await _term_weights(memory, terms, analyze_text)
+    weights, present = await _term_weights(memory, terms, analyze_text)
     queries = _pair_queries(terms, weights)
     if not queries:
         return ()
+    single = tuple(
+        term
+        for term in dict.fromkeys(terms)
+        if term in present and weights.get(term, 0.0) >= _SINGLE_TERM_MIN_IDF
+    )
 
     scores: dict[str, float] = {}
     citations: dict[str, object] = {}
@@ -259,6 +269,22 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
             SearchMemoryRequest(query=query, mode="fts", limit=_PAIR_CANDIDATES)
         )
         for rank, hit in enumerate(page.hits, start=1):
+            key = hit.entry_id
+            citations.setdefault(
+                key,
+                MemoryCitation(
+                    memory_ref=hit.memory_ref,
+                    entry_id=hit.entry_id,
+                    entry_version_id=hit.entry_version_id,
+                ),
+            )
+            scores[key] = scores.get(key, 0.0) + weight / (_RRF_K + rank)
+    for term in single:
+        weight = _SINGLE_TERM_WEIGHT * weights.get(term, 1.0)
+        page = await memory.search(
+            SearchMemoryRequest(query=term, mode="fts", limit=_PAIR_CANDIDATES)
+        )
+        for rank, hit in enumerate(page.hits[:_SINGLE_TERM_CANDIDATES], start=1):
             key = hit.entry_id
             citations.setdefault(
                 key,
@@ -303,26 +329,33 @@ def _pair_queries(terms: tuple[str, ...], weights: dict[str, float]) -> tuple[tu
         queries.append((f"{left} {right}", weight))
     return tuple(queries)
 
-async def _term_weights(memory, terms: tuple[str, ...], analyze_text) -> dict[str, float]:
-    """Return the inverse document frequency of every question term in the scope."""
+async def _term_weights(
+    memory, terms: tuple[str, ...], analyze_text
+) -> tuple[dict[str, float], set[str]]:
+    """Return the inverse document frequency of every question term.
+
+    The second value holds the terms that occur in at least one page, so that
+    a single term query is only issued for a term that can actually match.
+    """
 
     total = 0
     frequencies: Counter[str] = Counter()
     try:
         listing = await memory.list(include_inactive=True)
     except Exception:  # noqa: BLE001 - the listing is an optimisation, not a requirement
-        return {term: 1.0 for term in terms}
+        return {term: 1.0 for term in terms}, set()
     for record in listing.entries:
         total += 1
         for term in set(analyze_text(record.entry.text).split()):
             frequencies[term] += 1
     if not total:
-        return {term: 1.0 for term in terms}
+        return {term: 1.0 for term in terms}, set()
     weights: dict[str, float] = {}
     for term in terms:
         document_frequency = frequencies.get(term, 0)
         weights[term] = math.log(1 + (total - document_frequency + 0.5) / (document_frequency + 0.5))
-    return weights
+    present = {term for term in terms if frequencies.get(term, 0) > 0}
+    return weights, present
 
 
 PDF_PAGE_ADAPTER = PDFPageAdapter()
