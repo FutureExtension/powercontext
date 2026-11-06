@@ -75,6 +75,10 @@ _OCEANBASE_TICK_SECONDS = 1.0
 _OCEANBASE_LEASE_SECONDS = 15.0
 _RETRY_BASE_SECONDS = 30.0
 _RETRY_CAP_SECONDS = 1800.0
+# A first execution timeout is often transient resource pressure rather than a
+# durable failure.  The default production policy retries it quickly, leaving
+# custom retry policies (and their tests) on their configured backoff.
+_TIMEOUT_RETRY_DELAY_SECONDS = 1.0
 _CONTROL_CONFLICT_RETRY_SECONDS = 0.1
 _DISCOVERY_PAGE_SIZE = 100
 _RETRY_STATE_LIMIT = 1000
@@ -1082,7 +1086,17 @@ class ArtifactProcessingSupervisor:
             except Exception as error:
                 previous = state.retries.get(scope)
                 failures = 1 if previous is None else previous.failures + 1
-                delay = min(self._retry_cap, self._retry_base * 2 ** min(failures - 1, 20) * self._jitter())
+                if (
+                    isinstance(error, TimeoutError)
+                    and failures == 1
+                    and self._retry_base == _RETRY_BASE_SECONDS
+                ):
+                    delay = _TIMEOUT_RETRY_DELAY_SECONDS
+                else:
+                    delay = min(
+                        self._retry_cap,
+                        self._retry_base * 2 ** min(failures - 1, 20) * self._jitter(),
+                    )
                 self._defer(state, scope, failures, asyncio.get_running_loop().time() + delay)
                 state.failed += 1
                 if isinstance(error, TimeoutError):
