@@ -114,5 +114,21 @@ $("ask").addEventListener("click", ask);
 $("question").addEventListener("keydown", (event) => {
   if (event.key === "Enter") ask();
 });
+
+// A link may carry the question, so a result can be shared and reopened.
+const params = new URLSearchParams(window.location.search);
+if (params.get("q")) {
+  $("question").value = params.get("q");
+  if (params.get("topic")) {
+    const restore = () => {
+      $("topic").value = params.get("topic");
+      ask();
+    };
+    setTimeout(restore, 300);
+  } else {
+    setTimeout(ask, 300);
+  }
+}
+
 loadTopics();
 loadProgress();
