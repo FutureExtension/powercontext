@@ -46,6 +46,14 @@ def test_far_over_long_page_is_trimmed_to_the_limit() -> None:
     assert fitted.startswith("note 0 ")
 
 
+def test_document_identity_that_does_not_fit_is_left_alone() -> None:
+    # The identity alone is larger than one entry, so no page of this
+    # document can be stored.  The page is returned unchanged instead of being
+    # cut from the wrong end.
+    text = "line revenue 2022\n" * 100
+    assert fit_page_text("D" * 9000, text) == text
+
+
 def test_trim_does_not_split_a_multibyte_character() -> None:
     text = "收入 " * 4000
     fitted = fit_page_text("doc", text)

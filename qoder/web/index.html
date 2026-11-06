@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>研记 · 研究资料检索台</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <h1>研记 <span>Research Desk</span></h1>
+  <p class="tagline">把讲义与笔记放进 seekdb，用自然语言问出带出处的证据；复习进度由 PowerContext 记住，下次接着用。</p>
+</header>
+
+<main>
+  <section class="panel">
+    <label for="question">提问</label>
+    <div class="row">
+      <input id="question" type="text" placeholder="例如：分词器不一致会怎样？" autocomplete="off">
+      <select id="topic"><option value="">全部主题</option></select>
+      <button id="ask">检索</button>
+    </div>
+    <div id="hint" class="hint"></div>
+  </section>
+
+  <section class="panel">
+    <h2>证据</h2>
+    <ol id="hits" class="hits"></ol>
+  </section>
+
+  <section class="panel">
+    <h2>复习进度</h2>
+    <ul id="progress" class="progress"></ul>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

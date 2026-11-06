@@ -14,18 +14,17 @@ import pymysql
 
 from sdd.config import Settings
 
-SCHEMA = (
+TABLES = (
     """
-    CREATE TABLE IF NOT EXISTS sdd_spec (
+CREATE TABLE IF NOT EXISTS sdd_spec (
       spec_id   VARCHAR(191) NOT NULL PRIMARY KEY,
       title     VARCHAR(256) NOT NULL,
       file_path VARCHAR(256) NOT NULL DEFAULT '',
       body      TEXT         NOT NULL
     )
     """,
-    "CREATE FULLTEXT INDEX idx_sdd_spec_body ON sdd_spec (body) WITH PARSER ik",
     """
-    CREATE TABLE IF NOT EXISTS sdd_symbol (
+CREATE TABLE IF NOT EXISTS sdd_symbol (
       symbol_id    VARCHAR(191) NOT NULL PRIMARY KEY,
       file_path    VARCHAR(256) NOT NULL,
       symbol       VARCHAR(128) NOT NULL,
@@ -35,16 +34,22 @@ SCHEMA = (
       body         TEXT         NOT NULL
     )
     """,
-    "CREATE FULLTEXT INDEX idx_sdd_symbol_body ON sdd_symbol (body) WITH PARSER ik",
     """
-    CREATE TABLE IF NOT EXISTS sdd_test (
+CREATE TABLE IF NOT EXISTS sdd_test (
       test_id   VARCHAR(191) NOT NULL PRIMARY KEY,
       file_path VARCHAR(256) NOT NULL,
       name      VARCHAR(256) NOT NULL,
       body      TEXT         NOT NULL
     )
     """,
-    "CREATE FULLTEXT INDEX idx_sdd_test_body ON sdd_test (body) WITH PARSER ik",
+)
+
+# The fulltext indexes are built separately: a build can take the
+# server down, so it only runs when the index is really missing.
+INDEXES = (
+    ("sdd_spec", "idx_sdd_spec_body", "CREATE FULLTEXT INDEX idx_sdd_spec_body ON sdd_spec (body) WITH PARSER ik"),
+    ("sdd_symbol", "idx_sdd_symbol_body", "CREATE FULLTEXT INDEX idx_sdd_symbol_body ON sdd_symbol (body) WITH PARSER ik"),
+    ("sdd_test", "idx_sdd_test_body", "CREATE FULLTEXT INDEX idx_sdd_test_body ON sdd_test (body) WITH PARSER ik"),
 )
 
 # The identifier columns carry a path and a symbol name, so they are wider
@@ -60,6 +65,46 @@ MIGRATIONS = (
     ("sdd_symbol", "related_test", "VARCHAR(191) NOT NULL DEFAULT ''"),
     ("sdd_test", "test_id", "VARCHAR(191) NOT NULL"),
 )
+
+
+def _fulltext_index_exists(cursor, database: str, table: str, index: str) -> bool:
+    """Return whether the fulltext index is already installed.
+
+    Building a fulltext index can take the server down, so the index is only
+    built when it is really missing.
+    """
+
+    cursor.execute(
+        "SELECT COUNT(*) FROM information_schema.STATISTICS "
+        "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND INDEX_NAME=%s "
+        "AND INDEX_TYPE='FULLTEXT'",
+        (database, table, index),
+    )
+    row = cursor.fetchone()
+    return bool(row and int(row[0] or 0) > 0)
+
+
+def _create_index(cursor, statement: str) -> None:
+    """Build a fulltext index and report a lost server clearly.
+
+    seekdb 1.3.0 on Windows can crash while it builds a fulltext index, so a
+    lost connection is reported as such instead of a bare protocol error.
+    """
+
+    try:
+        cursor.execute(statement)
+    except pymysql.err.OperationalError as error:
+        message = str(error)
+        if "duplicate" in message.lower():
+            # Another session installed the index first.
+            return
+        if "Lost connection" in message or "gone away" in message:
+            raise RuntimeError(
+                "the seekdb server closed the connection while it built the fulltext "
+                "index; seekdb 1.3.0 on Windows crashes in the index build, so retry "
+                "the command, or run the embedded engine (pylibseekdb) instead"
+            ) from error
+        raise
 
 
 @dataclass(frozen=True)
@@ -100,15 +145,18 @@ class MaterialStore:
                     f"CREATE DATABASE IF NOT EXISTS `{self.settings.seekdb_database}`"
                 )
                 cursor.execute(f"USE `{self.settings.seekdb_database}`")
-                for statement in SCHEMA:
+                for statement in TABLES:
                     try:
                         cursor.execute(statement)
                     except pymysql.MySQLError as error:
-                        # "Duplicate key name" is raised as an OperationalError
-                        # while a duplicate table is a ProgrammingError, so the
+                        # A duplicate table is a ProgrammingError, so the
                         # already-installed schema is detected by message.
                         if "duplicate" not in str(error).lower():
                             raise
+                for table, index, statement in INDEXES:
+                    if _fulltext_index_exists(cursor, self.settings.seekdb_database, table, index):
+                        continue
+                    _create_index(cursor, statement)
                 for table, column, definition in MIGRATIONS:
                     cursor.execute(
                         "SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS "

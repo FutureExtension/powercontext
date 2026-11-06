@@ -40,13 +40,20 @@ class TaskRecord:
     todo: list[str] = field(default_factory=list)
     verification: list[str] = field(default_factory=list)
     proposal: str = ""
+    revision: int = 0
 
     def to_payload(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True)
+        # The marker is part of the stored text so that the fulltext query
+        # that looks the state up finds it again.  Without it the record
+        # would only be reachable by luck, through a word of the payload.
+        return f"{STATE_MARKER} " + json.dumps(asdict(self), ensure_ascii=False, sort_keys=True)
 
     @classmethod
     def from_payload(cls, payload: str) -> "TaskRecord":
-        return cls(**json.loads(payload))
+        text = payload.strip()
+        if text.startswith(STATE_MARKER):
+            text = text[len(STATE_MARKER) :].strip()
+        return cls(**json.loads(text))
 
 
 class TaskStateStore:
@@ -95,14 +102,21 @@ class TaskStateStore:
             page = await runtime.memory.for_scope(scope_id).search(
                 SearchMemoryRequest(query=STATE_MARKER, mode="fts", limit=10)
             )
+            newest: TaskRecord | None = None
             for hit in page.hits:
-                if hit.text.startswith("{"):
-                    return TaskRecord.from_payload(hit.text)
-            return None
+                if not hit.text.startswith(STATE_MARKER):
+                    continue
+                record = TaskRecord.from_payload(hit.text)
+                # The memory is append only, so the newest record of a scope is
+                # the one with the highest revision.
+                if newest is None or record.revision > newest.revision:
+                    newest = record
+            return newest
 
     async def save(self, record: TaskRecord) -> None:
         """Persist the state of one task."""
 
+        record.revision += 1
         async with open_builtin_runtime(self._config()) as runtime:
             scope_id = await self._scope_id(runtime, record.scope)
             await runtime.memory.for_scope(scope_id).remember(

@@ -127,6 +127,11 @@ def fit_page_text(document_id: str, text: str) -> str:
 
     budget = MEMORY_ENTRY_TEXT_LIMIT - len(document_id.encode("utf-8")) - 1
     encoded = text.encode("utf-8")
+    if budget < 0:
+        # The document identity alone does not fit into an entry, so no page
+        # of this document can.  Cutting the tail instead of the head would
+        # hide the problem, so the page is returned unchanged.
+        return text
     if len(encoded) <= budget:
         return text
     candidate = text.rstrip()

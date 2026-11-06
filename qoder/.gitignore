@@ -1,0 +1,4 @@
+# Runtime state of the research desk.
+state/
+__pycache__/
+*.pyc
