@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-from pyobvector import VECTOR, VectorIndex
 from sqlalchemy import (
     BigInteger,
     Column,
@@ -233,6 +232,10 @@ class OceanBaseMemoryVectorIndex:
     """OceanBase HNSW strategy over rebuildable active-head embeddings."""
 
     def __init__(self, profile: EmbeddingProfile) -> None:
+        # pyobvector is only needed by this backend and costs about a second
+        # to import, so it is loaded when the index is actually created.
+        from pyobvector import VECTOR, VectorIndex
+
         if profile.dimension < 1 or profile.distance != "l2" or profile.normalization != "unit":
             raise CapabilityNotSupportedError(
                 "vector",

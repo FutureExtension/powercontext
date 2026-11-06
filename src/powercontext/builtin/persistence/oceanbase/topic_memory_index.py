@@ -19,7 +19,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from pyobvector import VECTOR, VectorIndex
 from sqlalchemy import (
     BigInteger,
     Column,
@@ -334,6 +333,9 @@ class OceanBaseTopicMemoryVectorIndex:
     """Use native HNSW indexes for complete Topic and detail embeddings."""
 
     def __init__(self, profile: EmbeddingProfile) -> None:
+        # Loaded on demand: see the memory vector index for the rationale.
+        from pyobvector import VECTOR, VectorIndex
+
         if profile.dimension < 1 or profile.distance != "l2" or profile.normalization != "unit":
             raise TopicMemoryCapabilityError(
                 "vector",

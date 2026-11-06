@@ -1,0 +1,6 @@
+# .gitignore for the MiniMax submission assets.
+state/
+__pycache__/
+*.pyc
+verification-workspace/
+_dbg_ws/

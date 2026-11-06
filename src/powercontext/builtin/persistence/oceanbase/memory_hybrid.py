@@ -30,7 +30,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from pyobvector import VECTOR
 from sqlalchemy import Table, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -179,6 +178,9 @@ class OceanBaseMemoryHybridIndex:
         )
 
     def _statement(self, tagged: bool):
+        # Loaded on demand: only the OceanBase and seekdb backends use it.
+        from pyobvector import VECTOR
+
         sql = self._tagged_sql if tagged else self._plain_sql
         binds = [
             bindparam("memory_artifact_ids", expanding=True),

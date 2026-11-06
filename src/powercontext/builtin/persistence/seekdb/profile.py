@@ -25,7 +25,6 @@ from types import ModuleType
 from typing import Any, Literal, Protocol, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, field_validator
-from pyobvector import AsyncOceanBaseDialect
 from sqlalchemy import Table
 from sqlalchemy.dialects import registry as dialect_registry
 from sqlalchemy.engine import URL
@@ -42,16 +41,45 @@ _DIALECT_REGISTRY_NAME = "mysql.aseekdb"
 _T = TypeVar("_T")
 
 
-class AsyncSeekDBDialect(AsyncOceanBaseDialect):
-    """OceanBase-compatible dialect with seekdb-safe connection shutdown."""
+_DIALECT_CLASS: type | None = None
 
-    supports_statement_cache = AsyncOceanBaseDialect.supports_statement_cache
 
-    @override
-    def do_close(self, dbapi_connection: DBAPIConnection) -> None:
-        # seekdb resets the socket while aiomysql drains COM_QUIT. SQLAlchemy's
-        # terminate path handles that reset and falls back to closing the transport.
-        self.do_terminate(dbapi_connection)
+def _seekdb_dialect_class() -> type:
+    """Build the seekdb dialect on first use.
+
+    The dialect derives from the pyobvector OceanBase dialect, and importing
+    that package costs close to a second. Every Worker child process would
+    pay for it even when the runtime stores state in SQLite, so the class is
+    created on demand and the module keeps a lazy attribute for the
+    SQLAlchemy dialect registry.
+    """
+
+    global _DIALECT_CLASS
+    if _DIALECT_CLASS is None:
+        from pyobvector import AsyncOceanBaseDialect
+
+        class AsyncSeekDBDialect(AsyncOceanBaseDialect):
+            """OceanBase-compatible dialect with seekdb-safe connection shutdown."""
+
+            supports_statement_cache = AsyncOceanBaseDialect.supports_statement_cache
+
+            @override
+            def do_close(self, dbapi_connection: DBAPIConnection) -> None:
+                # seekdb resets the socket while aiomysql drains COM_QUIT.
+                # SQLAlchemy's terminate path handles that reset and falls
+                # back to closing the transport.
+                self.do_terminate(dbapi_connection)
+
+        _DIALECT_CLASS = AsyncSeekDBDialect
+    return _DIALECT_CLASS
+
+
+def __getattr__(name: str) -> object:
+    """Resolve the dialect class lazily for the SQLAlchemy dialect registry."""
+
+    if name == "AsyncSeekDBDialect":
+        return _seekdb_dialect_class()
+    raise AttributeError(name)
 
 
 class _SeekDBInstance(Protocol):
