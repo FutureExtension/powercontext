@@ -34,6 +34,12 @@ PDF_PAGE_SOURCE_VERSION = "1"
 _PAIR_CANDIDATES = 100
 _RRF_K = 60.0
 
+# A captured page becomes one memory entry whose text is the document identity
+# followed by the page text, and a memory entry holds at most 8192 UTF-8 bytes.
+# A page that does not fit would make the whole ingest of the document fail, so
+# its tail is trimmed instead.
+MEMORY_ENTRY_TEXT_LIMIT = 8192
+
 
 class PDFDocumentInput(BaseModel):
     """One complete PDF document addressed by a caller-stable identity."""
@@ -96,10 +102,39 @@ def parse_pdf_document(value: PDFDocumentInput) -> tuple[PDFPageInput, ...]:
             document_id=document_id,
             document_sha256=document_sha256,
             page_number=number,
-            text=text,
+            text=fit_page_text(document_id, text),
         )
         for number, text in enumerate(texts, start=1)
     )
+
+
+def fit_page_text(document_id: str, text: str) -> str:
+    """Return the page text that fits into one memory entry.
+
+    The projection of a page carries the document identity and the page text,
+    and the entry that the runtime stores holds that projection.  A page whose
+    text exceeds the entry limit would make the ingest of the whole document
+    fail, so the tail of that page is trimmed.  Financial reports repeat a
+    running footer on every page, so the tail carries little evidence and the
+    trim stays as small as the budget allows.  A page that fits is returned
+    unchanged.
+    """
+
+    budget = MEMORY_ENTRY_TEXT_LIMIT - len(document_id.encode("utf-8")) - 1
+    encoded = text.encode("utf-8")
+    if len(encoded) <= budget:
+        return text
+    candidate = text.rstrip()
+    if len(candidate.encode("utf-8")) <= budget:
+        return candidate
+    trimmed = encoded[:budget].decode("utf-8", errors="ignore")
+    newline = trimmed.rfind("\n")
+    if newline >= 0 and len(trimmed) - newline <= 200:
+        return trimmed[: newline + 1]
+    space = trimmed.rfind(" ")
+    if space > 0:
+        return trimmed[:space]
+    return trimmed
 
 
 def _validate_document_id(document_id: str) -> None:
