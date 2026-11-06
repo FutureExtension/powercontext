@@ -40,6 +40,27 @@ _SINGLE_TERM_MIN_IDF = 1.0
 _SINGLE_TERM_WEIGHT = 2.0
 _SINGLE_TERM_CANDIDATES = 3
 
+# A long natural-language question often names a statement without repeating the
+# statement's own words: "PPNE" for the balance sheet, "net income" for the
+# income statement, "acquired" for the acquisitions note.  A small prior for the
+# page titles sharpens the lexical ranking without looking at any answer.
+_STATEMENT_INTENTS = (
+    ("balance", ("balance sheet", "total assets", "total liabilities", "shareholders equity",
+                 "ppne", "property plant", "cash and cash equivalents", "receivable", "inventory")),
+    ("income", ("net income", "revenue", "operating income", "gross profit", "income statement",
+                "cost of sales", "earnings per share", "eps")),
+    ("cashflow", ("cash flow", "cash provided", "capex", "capital expenditure", "dividend",
+                  "depreciation", "amortization")),
+    ("acquisition", ("acquire", "acquisition", "subsidiary", "merger")),
+)
+_STATEMENT_MARKERS = {
+    "balance": ("consolidated balance sheet", "consolidated balance sheets"),
+    "income": ("consolidated statements of income", "consolidated statement of income"),
+    "cashflow": ("consolidated statements of cash flow", "consolidated statement of cash flow"),
+    "acquisition": ("acquisitions", "business combinations"),
+}
+_STATEMENT_BONUS = 0.2
+
 # A captured page becomes one memory entry whose text is the document identity
 # followed by the page text, and a memory entry holds at most 8192 UTF-8 bytes
 # (the product's canonical entry limit).  A page that does not fit would make
@@ -373,6 +394,7 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
 
     scores: dict[str, float] = {}
     citations: dict[str, object] = {}
+    texts: dict[str, str] = {}
     for query, weight in queries:
         page = await memory.search(
             SearchMemoryRequest(query=query, mode="fts", limit=_PAIR_CANDIDATES)
@@ -387,6 +409,7 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
                     entry_version_id=hit.entry_version_id,
                 ),
             )
+            texts.setdefault(key, hit.text)
             scores[key] = scores.get(key, 0.0) + weight / (_RRF_K + rank)
     for term in single:
         weight = _SINGLE_TERM_WEIGHT * weights.get(term, 1.0)
@@ -403,7 +426,15 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
                     entry_version_id=hit.entry_version_id,
                 ),
             )
+            texts.setdefault(key, hit.text)
             scores[key] = scores.get(key, 0.0) + weight / (_RRF_K + rank)
+    intents = _statement_intents(question)
+    if intents:
+        markers = tuple(marker for intent in intents for marker in _STATEMENT_MARKERS[intent])
+        for key in scores:
+            lowered = texts.get(key, "").lower()
+            if any(marker in lowered for marker in markers):
+                scores[key] += _STATEMENT_BONUS
     if not scores:
         return ()
 
@@ -424,6 +455,17 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
         seen.add(identity)
         selected.append(citation)
     return tuple(selected)
+
+
+def _statement_intents(question: str) -> tuple[str, ...]:
+    """Return the financial-statement intents a question mentions."""
+
+    lowered = question.lower()
+    return tuple(
+        intent
+        for intent, keywords in _STATEMENT_INTENTS
+        if any(keyword in lowered for keyword in keywords)
+    )
 
 
 def _pair_queries(terms: tuple[str, ...], weights: dict[str, float]) -> tuple[tuple[str, float], ...]:
