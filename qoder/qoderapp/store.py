@@ -83,6 +83,22 @@ def _create_index(cursor, statement: str) -> None:
 
     try:
         cursor.execute(statement)
+    except pymysql.err.NotSupportedError as error:
+        # Some seekdb Windows builds transiently reject WITH PARSER ik while the
+        # default fulltext parser is available. Keep the same indexed column
+        # and query contract, but retry once without the optional parser.
+        fallback = statement.replace(" WITH PARSER ik", "")
+        if fallback == statement:
+            raise
+        try:
+            cursor.execute(fallback)
+        except pymysql.MySQLError as fallback_error:
+            raise RuntimeError(
+                "seekdb rejected the fulltext index with parser ik and the default parser; "
+                "retry the command or run the embedded engine (pylibseekdb) instead"
+            ) from fallback_error
+        else:
+            print("fulltext parser ik unavailable; using the default parser", flush=True)
     except pymysql.err.OperationalError as error:
         message = str(error)
         if "duplicate" in message.lower():
@@ -95,7 +111,6 @@ def _create_index(cursor, statement: str) -> None:
                 "the command, or run the embedded engine (pylibseekdb) instead"
             ) from error
         raise
-
 
 @dataclass(frozen=True)
 class NoteHit:
