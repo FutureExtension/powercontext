@@ -60,6 +60,14 @@ _STATEMENT_MARKERS = {
     "acquisition": ("acquisitions", "business combinations"),
 }
 _STATEMENT_BONUS = 0.2
+# An acquisition note is often split across adjacent physical pages.  When the
+# question has acquisition intent and a candidate page carries an acquisition
+# heading, a small prior for its immediate next page keeps the continuation in
+# the candidate window.  The rule is document-agnostic and does not inspect a
+# question id, company name, or fixed page number.
+_CONTINUATION_INTENTS = ("acquisition",)
+_CONTINUATION_BONUS = 0.2
+_CONTINUATION_CANDIDATES = 80
 
 # A captured page becomes one memory entry whose text is the document identity
 # followed by the page text, and a memory entry holds at most 8192 UTF-8 bytes
@@ -435,6 +443,31 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
             lowered = texts.get(key, "").lower()
             if any(marker in lowered for marker in markers):
                 scores[key] += _STATEMENT_BONUS
+    if any(intent in intents for intent in _CONTINUATION_INTENTS) and scores:
+        acquisition_markers = _STATEMENT_MARKERS["acquisition"]
+        marker_keys = {
+            key for key in scores if any(marker in texts.get(key, "").lower() for marker in acquisition_markers)
+        }
+        if marker_keys:
+            candidates = sorted(scores, key=lambda key: (-scores[key], key))[:_CONTINUATION_CANDIDATES]
+            page_identities: dict[str, tuple[str, int]] = {}
+            for key in set(marker_keys) | set(candidates):
+                citation = citations[key]
+                try:
+                    record = await memory.get(GetMemoryEntryRequest(citation=citation))
+                except Exception:  # noqa: BLE001 - a vanished head must not break the search
+                    continue
+                for reference in record.entry.sources:
+                    identity = _pdf_page_identity(reference.source_id)
+                    if identity is not None:
+                        page_identities[key] = identity
+                        break
+            marker_pages = {page_identities[key] for key in marker_keys if key in page_identities}
+            continuation_pages = {(document, page + 1) for document, page in marker_pages}
+            if continuation_pages:
+                for key in scores:
+                    if page_identities.get(key) in continuation_pages:
+                        scores[key] += _CONTINUATION_BONUS
     if not scores:
         return ()
 
@@ -466,6 +499,21 @@ def _statement_intents(question: str) -> tuple[str, ...]:
         for intent, keywords in _STATEMENT_INTENTS
         if any(keyword in lowered for keyword in keywords)
     )
+
+
+def _pdf_page_identity(source_id: str) -> tuple[str, int] | None:
+    """Return the document identity and physical page encoded in a PDF Source id."""
+
+    if not source_id.startswith("pdf:"):
+        return None
+    parts = source_id.split(":")
+    if len(parts) < 4:
+        return None
+    try:
+        page_number = int(parts[-1])
+    except ValueError:
+        return None
+    return ":".join(parts[:-1]), page_number
 
 
 def _pair_queries(terms: tuple[str, ...], weights: dict[str, float]) -> tuple[tuple[str, float], ...]:
