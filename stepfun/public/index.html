@@ -114,6 +114,17 @@
   </p>
 </section>
 
+<!-- transformers.js web bundle 以裸说明符 `onnxruntime-web/webgpu` 引入 ONNX Runtime；
+     浏览器必须用 import map 把它指到本机镜像，整个过程不访问任何 CDN。 -->
+<script type="importmap">
+{
+  "imports": {
+    "onnxruntime-web": "/vendor/ort/ort.min.mjs",
+    "onnxruntime-web/webgpu": "/vendor/ort/ort.webgpu.min.mjs",
+    "onnxruntime-common": "/vendor/ort/common/index.js"
+  }
+}
+</script>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

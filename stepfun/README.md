@@ -22,7 +22,7 @@ npm start                   # 启动应用 → http://127.0.0.1:5173/
 npm run verify              # 21 条断言全绿，退出码 0
 npm run bench               # 分阶段计时，输出 JSON
 npm run models:info         # 各模型 fp32/fp16/q8 体积与压缩比
-npm run verify:browser      # 浏览器端验证（见 §9「未完成项」）
+npm run verify:browser      # 浏览器端验证（16 条断言全绿，见 §9.3）
 ```
 
 | 项目 | 值 |
@@ -147,7 +147,7 @@ npm run verify:browser      # 浏览器端验证（见 §9「未完成项」）
 1. 差异幅度（0.036 / 0.014）**与评测集规模同量级**（28 条查询，1 条查询命中与否就会让 Recall@5 变化 0.036），因此**不能据此断言「INT8 一定优于 FP32」**，只能说「在本评测集上 INT8 未观察到质量下降」。
 2. FP16 与 FP32 的三个指标完全一致，说明两者在本数据集上的排序结果基本相同；这是量化不改变语义排序的正常表现。
 3. 评测方法：Recall@K = 命中的相关文档数 ÷ 相关文档总数（文档级，按 `metadata.doc_id` 归并切块后平均）；HitRate@K = 至少命中一条相关文档的查询占比；nDCG@K 用二值增益、DCG/IDCG 归一化。详见 `scripts/verify.mjs` 阶段 8 与 `scripts/bench.mjs`。
-4. **本表是 Node 端 onnxruntime-node（CPU）口径**。浏览器端 WebGPU/WASM 的质量数字**未测**（见 §9）。
+4. **本表是 Node 端 onnxruntime-node（CPU）口径**。浏览器端（WebGPU/WASM）的**分阶段耗时已实测**（§9.3），但浏览器侧的**检索质量指标**（Recall@5 / HitRate@5 / nDCG@5）仍只有这张 Node 端表——浏览器验证跑的是 3 块样例语料，不足以复算质量指标。
 
 ---
 
@@ -169,7 +169,7 @@ npm run verify:browser      # 浏览器端验证（见 §9「未完成项」）
 
 5. **WASM 侧优化**：服务端下发 `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: credentialless`，使浏览器可启用 `SharedArrayBuffer`；`env.backends.onnx.wasm.numThreads = min(4, hardwareConcurrency - 1)`，并开启 SIMD，ORT 的 wasm/mjs 运行时也从本机 `/vendor/ort/` 加载（不走 CDN）。
 
-**本机实测情况（如实标注）**：本机为 Intel i5-5250U（3 核 / 1.60 GHz）笔记本，**没有可用的独立 GPU**。浏览器端 WebGPU 分支因此走的是「探测失败 → 自动降级 WASM」路径。**WebGPU 路径下的端到端延迟与吞吐本轮未测**（浏览器自动化在本环境未能跑通，见 §9）。
+**本机实测情况（如实标注）**：本机为 Intel i5-5250U（3 核 / 1.60 GHz）笔记本，**没有可用的独立 GPU**。但 2026-11-06 用无头 Edge 156 实测时，浏览器**确实暴露了一个 WebGPU 适配器**——`vendor=google, architecture=swiftshader`，即 Chromium 的**软件光栅化**实现，不是真实 GPU。两个分支都真实跑通了：WebGPU 分支创建了推理会话并完成向量化与检索；强制禁用 WebGPU 的场景则自动降级到 WASM。**因此 WebGPU 代码路径是实测过的，但耗时反映的是 CPU 软件渲染，不能代表真实显卡性能**（详见 §9.3）。
 
 ---
 
@@ -316,14 +316,50 @@ FROM (
 
 ---
 
+### 9.3 浏览器端实测（本机无头 Edge 156.0.4314.58，2026-11-06，`npm run verify:browser`）
+
+浏览器自动化验证**已跑通**：**16 条断言全绿**，报告 `data/browser-verify-report.json`，截图
+`data/browser-verify-webgpu-or-wasm.png`、`data/browser-verify-wasm-fallback.png`。
+
+| 阶段 | 场景 A：WebGPU（SwiftShader 软件适配器） | 场景 B：强制无适配器 → 自动降级 WASM |
+|---|---|---|
+| 模型加载状态探测 | 4,237.0 ms | 3,195.7 ms |
+| 文档向量化（浏览器本地，3 块） | 4,935.3 ms（0.61 块/秒） | 898.5 ms（3.34 块/秒） |
+| 写入 seekdb | 819.8 ms | 263.7 ms |
+| 索引刷新 | 424.7 ms | 524.8 ms |
+| 导入端到端 | 6,180.4 ms | 1,687.5 ms |
+| 查询向量化 | 601.2 ms | 25.5 ms |
+| seekdb 混合检索 | 69.5 ms | 46.7 ms |
+| 查询端到端 | 679.7 ms | 81.1 ms |
+| 浏览器控制台未捕获异常 | 0 | 0 |
+
+两个场景都验证了同一条链路：**浏览器内加载模型 → 浏览器内文档/查询向量化 → 写入 seekdb → 浏览器内检索 → DOM 渲染**；
+命中结果带回 512 维向量，混合检索 SQL 由 seekdb 生成（`DBMS_HYBRID_SEARCH`）。
+
+**必须说明的两点（如实）**：
+
+1. 场景 A 的 WebGPU 适配器是 **SwiftShader 软件实现**（`vendor=google, architecture=swiftshader`）。本机没有真实 GPU，
+   所以场景 A 的吞吐反而**低于** WASM 分支（0.61 vs 3.34 块/秒）——这是软件光栅化的开销，**不能**用来评价真实显卡上的 WebGPU 性能。
+2. 浏览器验证使用 3 块样例语料，证明的是**链路与后端选择正确**；检索质量指标仍只有 Node 端 §4.3 的那一组。
+
+### 9.4 为了跑通浏览器端而修复的三个真实缺陷
+
+| # | 缺陷 | 现象 | 修复 |
+|---|---|---|---|
+| 1 | 前端模块说明符无法解析 | `TypeError: Failed to resolve module specifier "onnxruntime-web/webgpu"`；页面永远不初始化，`window.stepfunReady` 永不出现 | transformers 的 web bundle 用**裸说明符**引入 ORT，浏览器无法解析 → `public/index.html` 增加 **import map**；`server.mjs` 本机镜像 ORT web bundle 与 wasm 运行时（`ort.webgpu.min.mjs`、`ort.min.mjs`、`ort-wasm-simd-threaded[.jsep].{mjs,wasm}`），并把 `onnxruntime-common` 的 ESM 产物整目录镜像到 `/vendor/ort/common/`；`env.backends.onnx.wasm.wasmPaths` 改为本机前缀 `/vendor/ort/`，由 transformers 按后端自动选 `.jsep` 或普通变体 |
+| 2 | seekdb 写入被可选依赖卡住 | `Embedding function 'default-embed' is not registered.`，任何写入都失败 | SDK 的 `getCollection()` 默认会解析默认嵌入函数；本应用的向量由浏览器算好后写入，必须显式传 `embeddingFunction: null`（`src/seekdb-service.mjs`），否则会去加载未安装的可选依赖 `@seekdb/default-embed` |
+| 3 | 验证脚本自身的三个问题 | ① `Runtime.evaluate` 里用顶层 `await` → SyntaxError；② 场景 A 的 Edge 进程不退出、占着 CDP 端口，场景 B 永远等不到 DevTools 就绪；③ 集合残留历史数据，导致「写入条数 == 浏览器算出的向量条数」断言失败 | ① 改成 async IIFE；② 每个场景用**独立 CDP 端口**，并在结束时通过浏览器级 CDP 端点发送 `Browser.close`；③ 导入前先调用 `/api/collection/reset` 重置集合 |
+
+---
+
 ## 10. 局限与未完成项（如实，不粉饰）
 
-1. **浏览器自动化验证本轮未跑通 —— 浏览器端数字均未测。**
-   `scripts/verify-browser.mjs` 已完整实现（用 Node 22 内置 `WebSocket`/`fetch` 手写最小 CDP 客户端驱动本机 Edge 156，覆盖：首页加载、浏览器内加载模型、浏览器内导入→写入、浏览器内检索、DOM 后端提示、以及「强制关闭 WebGPU 后自动降级 WASM」的第二场景与截图留证），并已接到 `npm run verify:browser`。
-   但**在本环境实际执行时，Edge 的 DevTools 调试端口未能建立（`Page.enable` 阶段超时）**，因此浏览器端的断言没有跑完。
-   * 原因：① 本机 `node_modules` 里**没有 puppeteer / playwright**，而本机网络不通、无法 `npm install`；② 本机 Edge 无头启动后 CDP 端口未就绪（无 GPU 的老机器 + 受限环境）。
-   * 后果：**浏览器端 WebGPU / WASM 的吞吐、端到端延迟、检索质量数字全部「未测」**；§4.3 与 §9 的性能数据**全部是 Node 端 onnxruntime-node（CPU）口径**，不能代表浏览器 WebGPU 表现。§5 中 WebGPU 的可用性判断同样来自代码逻辑，**未在本机浏览器中实测**。
-   * 补救：脚本内置了「不依赖浏览器的等价验证」降级路径（校验静态资源与模型镜像可达 + 前端确实含 WebGPU 探测与 WASM 降级分支），该路径同样因本环境问题未完成完整执行。脚本代码与运行入口均已交付，**换一台可正常启动浏览器的机器执行 `npm run verify:browser` 即可补齐**。
+1. **浏览器端的链路与后端选择已实测；真实 GPU 性能与浏览器侧质量指标仍未测。**
+   `scripts/verify-browser.mjs`（Node 22 内置 `WebSocket`/`fetch` 手写最小 CDP 客户端驱动本机 Edge 156）已在本机**跑通**：
+   **16 条断言全绿**（§9.3），覆盖首页加载、浏览器内加载模型、浏览器内导入→写入、浏览器内检索、DOM 后端提示、
+   以及「强制关闭 WebGPU 后自动降级 WASM」的第二场景与截图留证。
+   * 仍未测：① **真实显卡**上的 WebGPU 性能（本机只有 SwiftShader 软件适配器）；② 浏览器侧的检索质量指标（验证语料只有 3 块）。
+   * 过程中修掉了三个真实缺陷（模块说明符、seekdb 写入、验证脚本自身），逐条记录在 §9.4。
 
 2. **模型 revision 未固定到 commit SHA**（§3）。本地缓存来自 HF `resolve/main`，`.model-cache/` 内没有记录 commit。
 
@@ -333,8 +369,10 @@ FROM (
 
 5. **图片内容未支持**：赛题说明「图片内容支持可作为扩展」，本实现只做文本知识库。
 
-6. **服务端的 `/api/collection/:name/rows` 校验接口**在集合已存在但当前进程未创建它时会报 `Embedding function 'default-embed' is not registered.`（SDK `getCollection` 默认尝试加载可选嵌入依赖）。校验主路径（`scripts/verify.mjs` 用 `rawSql` 直查）不受影响。
+6. ~~**服务端的 `/api/collection/:name/rows` 校验接口**在集合已存在但当前进程未创建它时会报 `Embedding function 'default-embed' is not registered.`~~ —— **已修复**：`ensureCollection` 现在统一用 `getCollection({ name, embeddingFunction: null })` 取集合，不再触发 SDK 去加载可选嵌入依赖；浏览器写入路径与该校验接口都已恢复。
 
 7. **单机单进程**：应用服务与 seekdb 都跑在本机，`server.mjs` 的 seekdb 子进程随父进程退出而结束；多用户/生产部署需要把 seekdb 独立常驻。
 
-8. **本机没有可用 GPU**（Intel i5-5250U，无独立显卡），WebGPU 实际只能走降级路径；所有「WebGPU 优先」的逻辑都是按赛题要求实现的，但**没有在支持 WebGPU 的设备上验证过**。
+8. **本机没有真实 GPU**（Intel i5-5250U，无独立显卡）。无头 Edge 暴露的是 Chromium 的 **SwiftShader 软件 WebGPU 适配器**，
+   所以 §9.3 场景 A 的数字反映的是 CPU 软件渲染，**不代表真实显卡上的 WebGPU 性能**；「WebGPU 优先 + 自动降级」的代码路径已在真实浏览器里执行过，
+   但**硬件口径的 WebGPU 性能仍需在有真实 GPU 的机器上重跑 `npm run verify:browser`**。

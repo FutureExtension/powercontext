@@ -34,6 +34,9 @@ import { Checker, ensureSeekdb, reachable, waitFor } from './_lib.mjs';
 const argv = process.argv.slice(2);
 const KEEP_OPEN = argv.includes('--keep-open');
 const PORT = Number(process.env.STEPFUN_CDP_PORT || 9333);
+/** 每个场景用独立端口：Windows 上 Edge 的浏览器进程会脱离我们 spawn 的父进程继续存活，
+ *  杀父进程并不能释放端口，下一个场景若复用同一端口就永远等不到 DevTools 就绪。 */
+let scenarioSeq = 0;
 const APP = `http://${SERVER.host}:${SERVER.port}`;
 
 const ck = new Checker();
@@ -186,23 +189,27 @@ async function ensureServer() {
  * @param {boolean} o.expectWebgpu 是否期望走 WebGPU
  */
 async function runScenario({ name, extraFlags = [], expectWebgpu = null }) {
+  let browserWsUrl = null;
   const scenario = {
     name, extraFlags, backend: null, probe: null, dom: null,
     import: null, search: null, errors: [], pass: false,
   };
 
+  const port = PORT + (scenarioSeq++);
   const userDataDir = path.join(PATHS.data, `.browser-profile-${name}`);
   fs.mkdirSync(userDataDir, { recursive: true });
   const browserExe = findBrowser();
   const args = [
     '--headless=new',
-    `--remote-debugging-port=${PORT}`,
+    `--remote-debugging-port=${port}`,
     `--user-data-dir=${userDataDir}`,
     '--no-first-run', '--no-default-browser-check',
     '--disable-extensions', '--disable-background-networking',
     '--remote-allow-origins=*',
     '--window-size=1440,1000',
-    '--enable-unsafe-webgpu',
+    // 期望降级到 WASM 的场景必须**不带** --enable-unsafe-webgpu，
+    // 否则这个开关会重新打开 WebGPU，降级路径根本走不到。
+    ...(expectWebgpu === false ? [] : ['--enable-unsafe-webgpu']),
     ...extraFlags,
     'about:blank',
   ];
@@ -213,16 +220,17 @@ async function runScenario({ name, extraFlags = [], expectWebgpu = null }) {
     // 1) 等 DevTools 端口就绪
     let version = null;
     await waitFor(async () => {
-      try { version = await httpGet(`http://127.0.0.1:${PORT}/json/version`, 2000); return version.status === 200; }
+      try { version = await httpGet(`http://127.0.0.1:${port}/json/version`, 2000); return version.status === 200; }
       catch { return false; }
     }, { timeoutMs: 45000, intervalMs: 400 });
     scenario.browserVersion = JSON.parse(version.body)['Browser'];
+    browserWsUrl = JSON.parse(version.body).webSocketDebuggerUrl || null;
     report.browser = { exe: browserExe, version: scenario.browserVersion };
 
     // 2) 开一个标签页
     const created = await new Promise((resolve, reject) => {
       const req = http.request({
-        host: '127.0.0.1', port: PORT, path: '/json/new?about:blank', method: 'PUT',
+        host: '127.0.0.1', port, path: '/json/new?about:blank', method: 'PUT',
       }, (res) => {
         let body = '';
         res.on('data', (c) => { body += c; });
@@ -252,12 +260,29 @@ async function runScenario({ name, extraFlags = [], expectWebgpu = null }) {
     ck.info(`[${name}] 探测后端`, `navigator.gpu=${scenario.probe?.webgpu?.available} · backend=${scenario.probe?.backend} · ${scenario.probe?.reason || ''}`);
 
     // 5) 浏览器内加载模型（含 WebGPU → WASM 自动降级）
-    const loadInfo = await cdp.eval('JSON.parse(JSON.stringify(await window.stepfun.loadModel()))');
+    // Runtime.evaluate 的表达式不是 ES module，顶层 await 会直接抛 SyntaxError，
+    // 必须包成 async IIFE，再由 awaitPromise 取回结果。
+    const loadInfo = await cdp.eval('(async () => JSON.parse(JSON.stringify(await window.stepfun.loadModel())))()');
     scenario.backend = loadInfo.backend;
     scenario.loadReason = loadInfo.reason;
     scenario.fallback = !!loadInfo.fallback;
     scenario.adapter = loadInfo.webgpu?.adapter || null;
     ck.info(`[${name}] 模型加载后端`, `${loadInfo.backend} · fallback=${loadInfo.fallback} · ${loadInfo.reason || ''}`);
+
+    // 5.5 重置集合：让「写入条数 == 浏览器算出的向量条数」这条断言有意义
+    //     （否则集合里残留的历史文档会让 count 偏大）。
+    const resetInfo = await cdp.eval(`(async () => {
+      const modelId = document.getElementById('sel-model').value;
+      const dtype = document.getElementById('sel-dtype').value;
+      const r = await fetch('/api/collection/reset', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ modelId, dtype }),
+      });
+      return JSON.stringify(await r.json());
+    })()`);
+    scenario.reset = resetInfo;
+    ck.info(`[${name}] 重置集合`, resetInfo);
 
     // 6) 浏览器内导入（文档向量化在浏览器本地完成）
     const importResult = await cdp.eval(`(async () => {
@@ -319,6 +344,15 @@ async function runScenario({ name, extraFlags = [], expectWebgpu = null }) {
     cdp.close();
   } finally {
     if (!KEEP_OPEN) {
+      // Browser.close 走浏览器级 CDP 端点，才能真正结束整个浏览器进程树；
+      // 仅 kill 父进程在 Windows 上关不掉 Edge（它会另起浏览器进程）。
+      try {
+        if (browserWsUrl) {
+          const browser = await CDP.connect(browserWsUrl);
+          await browser.send('Browser.close').catch(() => {});
+          browser.close();
+        }
+      } catch { /* ignore */ }
       try { child.kill(); } catch { /* ignore */ }
     }
   }
@@ -389,6 +423,7 @@ async function main() {
   const a = await runScenario({ name: 'webgpu-or-wasm', expectWebgpu: null });
   report.scenarios.push(a);
 
+  const aStart = ck.items.length;
   ck.setStage('场景 A · 默认环境（WebGPU 优先，不可用则降级）');
   ck.ok(a.backend === 'webgpu' || a.backend === 'wasm', '推理后端已确定并可用',
     `backend=${a.backend}${a.fallback ? '（已降级）' : ''}`);
@@ -403,18 +438,23 @@ async function main() {
   ck.ok((a.dom?.resultCount || 0) > 0, '界面渲染出检索结果', `DOM .hit × ${a.dom?.resultCount}`);
   ck.ok(/DBMS_HYBRID_SEARCH/i.test((a.search?.sql || []).join('\n')),
     '混合检索 SQL 由 seekdb 生成（DBMS_HYBRID_SEARCH）');
+  a.pass = ck.items.slice(aStart).every((i) => i.pass);
 
   // 场景 B：强制关掉 WebGPU，验证降级路径
   const b = await runScenario({
     name: 'wasm-fallback',
-    extraFlags: ['--disable-features=WebGPU'],
+    extraFlags: ['--disable-features=WebGPU', '--disable-webgpu'],
     expectWebgpu: false,
   });
   report.scenarios.push(b);
 
+  const bStart = ck.items.length;
   ck.setStage('场景 B · 强制关闭 WebGPU → 自动降级 WASM');
-  ck.ok(b.probe?.webgpu?.available === false, 'navigator.gpu 在该场景下不可用',
-    `webgpu.available=${b.probe?.webgpu?.available}`);
+  // 新版 Chromium 里 navigator.gpu 恒为对象，即使 WebGPU 被禁用也一样；
+  // 真正的判据是「拿不到适配器」：navigator.gpu 缺失，或 requestAdapter() 返回 null。
+  ck.ok(b.probe?.webgpu?.available === false || b.probe?.webgpu?.adapter === null,
+    '该场景拿不到可用的 WebGPU 适配器（navigator.gpu 可能仍存在，但 requestAdapter() 返回 null）',
+    `webgpu.available=${b.probe?.webgpu?.available} adapter=${JSON.stringify(b.probe?.webgpu?.adapter ?? null)}`);
   ck.ok(b.backend === 'wasm', '自动降级到 WASM 后端', `backend=${b.backend}`);
   ck.ok(b.fallback === true, '降级被标记（fallback=true）');
   ck.ok(/WASM/.test(b.dom?.backend || ''), '界面提示当前为 WASM 后端',
@@ -425,6 +465,7 @@ async function main() {
     `${b.import?.chunks} 块 → count=${b.import?.count}`);
   ck.ok(b.search && b.search.hits.length > 0, 'WASM 下降级路径下检索仍可用',
     `${b.search?.hits.length} 条`);
+  b.pass = ck.items.slice(bStart).every((i) => i.pass);
 
   ck.setStage('控制台错误检查');
   const allErrors = [...(a.errors || []), ...(b.errors || [])];

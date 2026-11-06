@@ -19,10 +19,10 @@ env.allowLocalModels = true;
 env.allowRemoteModels = true;
 env.localModelPath = '/models/';
 env.useBrowserCache = true;
-env.backends.onnx.wasm.wasmPaths = {
-  mjs: '/vendor/ort/ort-wasm-simd-threaded.asyncify.mjs',
-  wasm: '/vendor/ort/ort-wasm-simd-threaded.asyncify.wasm',
-};
+// 用本机前缀而不是写死单个 wasm 文件：transformers.js 会按后端拼出
+// `${prefix}ort-wasm-simd-threaded[.jsep].{mjs,wasm}`，WebGPU 需要 .jsep 变体，
+// WASM 降级需要普通变体，两者都由 server.mjs 从本机 node_modules 提供。
+env.backends.onnx.wasm.wasmPaths = '/vendor/ort/';
 env.backends.onnx.wasm.numThreads = Math.max(
   1, Math.min(4, (navigator.hardwareConcurrency || 4) - 1),
 );

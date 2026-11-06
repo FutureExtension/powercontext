@@ -37,11 +37,19 @@ const VENDOR_FILES = {
   '/vendor/transformers.web.min.js': path.join(
     PATHS.nodeModules, '@huggingface', 'transformers', 'dist', 'transformers.web.min.js'),
 };
+// transformers.js 的 web bundle 用裸说明符 `onnxruntime-web/webgpu` 引入 ORT，
+// 浏览器无法解析裸说明符，因此必须由本机提供 web bundle 并配合 index.html 的 import map。
+// 这里同时提供 webgpu bundle、wasm bundle 以及它们各自会按相对路径加载的 wasm 运行时。
+const ORT_DIST = path.join(PATHS.nodeModules, 'onnxruntime-web', 'dist');
 const ORT_FILES = {
-  '/vendor/ort/ort-wasm-simd-threaded.asyncify.mjs': path.join(
-    PATHS.nodeModules, 'onnxruntime-web', 'dist', 'ort-wasm-simd-threaded.asyncify.mjs'),
-  '/vendor/ort/ort-wasm-simd-threaded.asyncify.wasm': path.join(
-    PATHS.nodeModules, 'onnxruntime-web', 'dist', 'ort-wasm-simd-threaded.asyncify.wasm'),
+  '/vendor/ort/ort.webgpu.min.mjs': path.join(ORT_DIST, 'ort.webgpu.min.mjs'),
+  '/vendor/ort/ort.min.mjs': path.join(ORT_DIST, 'ort.min.mjs'),
+  '/vendor/ort/ort-wasm-simd-threaded.jsep.mjs': path.join(ORT_DIST, 'ort-wasm-simd-threaded.jsep.mjs'),
+  '/vendor/ort/ort-wasm-simd-threaded.jsep.wasm': path.join(ORT_DIST, 'ort-wasm-simd-threaded.jsep.wasm'),
+  '/vendor/ort/ort-wasm-simd-threaded.mjs': path.join(ORT_DIST, 'ort-wasm-simd-threaded.mjs'),
+  '/vendor/ort/ort-wasm-simd-threaded.wasm': path.join(ORT_DIST, 'ort-wasm-simd-threaded.wasm'),
+  '/vendor/ort/ort-wasm-simd-threaded.asyncify.mjs': path.join(ORT_DIST, 'ort-wasm-simd-threaded.asyncify.mjs'),
+  '/vendor/ort/ort-wasm-simd-threaded.asyncify.wasm': path.join(ORT_DIST, 'ort-wasm-simd-threaded.asyncify.wasm'),
 };
 
 app.get('/vendor/transformers.web.min.js', (_req, res) => {
@@ -57,6 +65,19 @@ for (const [route, file] of Object.entries(ORT_FILES)) {
     res.sendFile(file);
   });
 }
+// onnxruntime-web 的 bundle 会以裸说明符 `onnxruntime-common` 引入公共层。
+// 它的 ESM 产物只含相对 import，浏览器可用，直接整目录镜像到 /vendor/ort/common/。
+const ORT_COMMON_DIRS = [
+  path.join(PATHS.nodeModules, 'onnxruntime-web', 'node_modules', 'onnxruntime-common', 'dist', 'esm'),
+  path.join(PATHS.nodeModules, 'onnxruntime-common', 'dist', 'esm'),
+];
+const ORT_COMMON_DIR = ORT_COMMON_DIRS.find((dir) => fs.existsSync(path.join(dir, 'index.js')));
+if (ORT_COMMON_DIR) {
+  app.use('/vendor/ort/common', express.static(ORT_COMMON_DIR, {
+    setHeaders: (res) => res.type('application/javascript'),
+  }));
+}
+
 // 本地模型镜像：/models/<org>/<name>/<file>
 app.use('/models', express.static(PATHS.modelCache, {
   fallthrough: true,

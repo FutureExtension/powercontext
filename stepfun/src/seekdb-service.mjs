@@ -123,24 +123,33 @@ export class SeekdbService {
    */
   async ensureCollection(name, model, opts = {}) {
     await this.connect();
-    if (this.collections.has(name)) return this.collections.get(name);
+    const cached = this.collections.get(name);
+    if (cached) return cached;
 
     const exists = await this.client.hasCollection(name);
-    if (!exists) {
-      const schema = new Schema({
-        fulltextIndex: new FulltextIndexConfig('ik', { ik_mode: 'smart' }),
-        vectorIndex: new VectorIndexConfig({
-          hnsw: { ...DEFAULT_HNSW, dimension: model.dim, ...(opts.hnsw || {}) },
-          // embeddingFunction: null —— 明确声明「向量由客户端（浏览器）生成后写入」，
-          // 避免 SDK 去加载可选依赖 @seekdb/default-embed 在服务端做嵌入。
-          embeddingFunction: null,
-        }),
-      });
-      const collection = await this.client.createCollection({ name, schema });
-      this.collections.set(name, collection);
-      return collection;
-    }
-    const collection = await this.client.getCollection({ name });
+    if (!exists) return this._createCollection(name, model, opts);
+
+    // embeddingFunction: null —— 明确告诉 SDK「向量由客户端（浏览器）算好后直接写入」。
+    // 不传这个参数时，SDK 会去解析默认嵌入函数 default-embed，而它是可选依赖
+    // @seekdb/default-embed（本机未安装），直接抛
+    // 「Embedding function 'default-embed' is not registered.」，导致任何写入都失败。
+    const collection = await this.client.getCollection({ name, embeddingFunction: null });
+    this.collections.set(name, collection);
+    return collection;
+  }
+
+  /** 创建一个「向量由客户端写入」的集合：不登记任何服务端嵌入函数。 */
+  async _createCollection(name, model, opts = {}) {
+    const schema = new Schema({
+      fulltextIndex: new FulltextIndexConfig('ik', { ik_mode: 'smart' }),
+      vectorIndex: new VectorIndexConfig({
+        hnsw: { ...DEFAULT_HNSW, dimension: model.dim, ...(opts.hnsw || {}) },
+        // embeddingFunction: null —— 明确声明「向量由客户端（浏览器）生成后写入」，
+        // 避免 SDK 去加载可选依赖 @seekdb/default-embed 在服务端做嵌入。
+        embeddingFunction: null,
+      }),
+    });
+    const collection = await this.client.createCollection({ name, schema });
     this.collections.set(name, collection);
     return collection;
   }
@@ -159,7 +168,7 @@ export class SeekdbService {
     if (await this.client.hasCollection(name)) {
       await this.client.deleteCollection(name);
     }
-    return this.ensureCollection(name, model, opts);
+    return this._createCollection(name, model, opts);
   }
 
   async listCollections() {

@@ -300,15 +300,62 @@ seekdb-js 客户端会扫描上面那条**由数据库生成**的 SQL；一旦�
 
 ---
 
-## 8. 本轮未完成的验证（如实）
+## 8. 浏览器端验证（2026-11-06 已跑通，16 条断言全绿）
+
+```bash
+cd stepfun
+npm run seekdb          # 先确保数据库在跑
+npm run verify:browser  # 浏览器端验证（无头 Edge 156）
+```
+
+| 项 | 值 |
+|---|---|
+| 退出码 | **0** |
+| 断言总数 | **16**（场景 A 8 条 + 场景 B 7 条 + 控制台检查 1 条） |
+| 通过 / 失败 | **16 / 0** |
+| 浏览器 | `Edg/156.0.4314.58`（无头，`--headless=new`） |
+| 原始报告 | `../data/browser-verify-report.json` |
+| 截图 | `../data/browser-verify-webgpu-or-wasm.png`、`../data/browser-verify-wasm-fallback.png` |
+
+### 8.1 场景 A：默认环境（WebGPU 优先）
+
+| 断言 | 结果 |
+|---|---|
+| 推理后端已确定并可用 | `backend=webgpu` |
+| 界面明确显示当前推理后端 | `#backend-value = "WebGPU"` |
+| 浏览器内完成文档向量化并写入 seekdb | 3 块 → count=3 |
+| 写入条数 == 浏览器算出的向量条数 | 3 == 3 |
+| 浏览器内检索返回命中 | 3 条 |
+| 命中结果带回向量（浏览器端 512 维） | 全部 512 维 |
+| 界面渲染出检索结果 | DOM `.hit × 3` |
+| 混合检索 SQL 由 seekdb 生成 | SQL 中出现 `DBMS_HYBRID_SEARCH` |
+
+### 8.2 场景 B：强制关闭 WebGPU → 自动降级 WASM
+
+| 断言 | 结果 |
+|---|---|
+| 该场景拿不到可用的 WebGPU 适配器 | `navigator.gpu` 仍存在但 `requestAdapter()` 返回 null |
+| 自动降级到 WASM 后端 | `backend=wasm` |
+| 降级被标记 | `fallback=true` |
+| 界面提示当前为 WASM 后端 | `#backend-value = "WASM"` |
+| 界面给出降级原因提示 | 「已降级到 WASM：navigator.gpu.requestAdapter() 返回 null…」 |
+| WASM 路径下导入→写入仍可完成 | 3 块 → count=3 |
+| WASM 路径下检索仍可用 | 3 条 |
+
+### 8.3 过程中修复的三个真实缺陷
+
+| # | 缺陷 | 现象 | 修复 |
+|---|---|---|---|
+| 1 | 前端模块说明符无法解析 | `Failed to resolve module specifier "onnxruntime-web/webgpu"`，页面永不初始化 | `public/index.html` 增加 **import map**；`server.mjs` 本机镜像 ORT web bundle + wasm 运行时 + `onnxruntime-common` 的 ESM 目录；`wasmPaths` 改本机前缀 |
+| 2 | seekdb 写入被可选依赖卡住 | `Embedding function 'default-embed' is not registered.` | `src/seekdb-service.mjs` 取集合时显式传 `embeddingFunction: null` |
+| 3 | 验证脚本自身三处问题 | 顶层 `await` → SyntaxError；场景间 CDP 端口冲突；集合残留导致计数断言失败 | 改 async IIFE；每场景独立端口 + `Browser.close`；导入前重置集合 |
+
+### 8.4 仍未验证的部分（如实）
 
 | 项 | 状态 | 原因 |
 |---|---|---|
-| **浏览器端自动化验证** | ❌ **未跑通** | `scripts/verify-browser.mjs` 已完整实现（Node 22 内置 WebSocket 手写最小 CDP 客户端，驱动本机 Edge 156），覆盖首页加载、浏览器内模型加载、浏览器内导入→写入、浏览器内检索、DOM 后端提示、以及强制关闭 WebGPU 的降级场景与截图留证；但本环境执行时 **Edge 的 DevTools 调试端口未能就绪（`Page.enable` 阶段超时）**，断言未跑完。附加原因：本机 `node_modules` 无 puppeteer/playwright 且网络不通无法安装。 |
-| WebGPU 可用性实测 | ❌ 未测 | 本机无独立 GPU；浏览器未跑通。代码已按赛题要求实现「探测 → 优先 WebGPU → 失败降级 WASM → 界面提示」。 |
-| 浏览器端性能数字 | ❌ 未测 | 同上。本文件与 `performance.md` 的所有数字均为 **Node 端 onnxruntime-node（CPU）口径**。 |
-
-补救方式：换一台可正常启动浏览器的机器，执行 `npm run verify:browser` 即可补齐浏览器侧断言与截图（脚本已交付并接入 `npm run verify:browser`）。
+| 真实 GPU 上的 WebGPU 性能 | ❌ 未测 | 本机无独立 GPU；浏览器暴露的是 **SwiftShader 软件适配器**（`vendor=google, architecture=swiftshader`），实测数字反映 CPU 软件渲染 |
+| 浏览器侧的检索质量指标 | ❌ 未测 | 浏览器验证只有 3 块样例语料；Recall@5 等指标仍只有 Node 端 §7 的那一组 |
 
 ---
 
