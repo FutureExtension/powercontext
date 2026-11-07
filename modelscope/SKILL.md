@@ -719,3 +719,5 @@ flush status: completed | processed: 1
 - seekdb 的建表/检索 SQL：抄自 seekdb 仓库 `2026-competition` 分支 README 与 `tools/benchmark/fts_large_bench_setup.sql`。
 - PowerContext 的表名、索引名、HTTP 路由、模型字段：抄自 `oceanbase/powercontext` 仓库源码（本地检出）。
 - 端口 2881、root 用户等默认连接参数：见 `赛题四「全文索引调优」的本地复现命令。
+
+OB-S:2hiQdUuquQuETr2I4saxAA
