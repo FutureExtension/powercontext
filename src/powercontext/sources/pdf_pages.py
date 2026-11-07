@@ -60,6 +60,24 @@ _STATEMENT_MARKERS = {
     "acquisition": ("acquisitions", "business combinations"),
 }
 _STATEMENT_BONUS = 0.2
+# A question often names a topic with the wording of the section that answers it:
+# "legal battles" is answered by the page headed "Item 3. Legal Proceedings" and
+# "restructuring costs" by the page headed "Note 3 - Restructuring and Impairment
+# Charges".  When a candidate page carries a section heading that mentions a term
+# of the question, that page is very likely the answer page, so it receives a
+# small prior.  The rule only reads the heading of the candidate page and the
+# question; it never looks at a company name, a question id, or a page number.
+_HEADING_PATTERN = re.compile(
+    r"^(?:item|note|part)\s+\d+\s*[.:\u2014\u2013-]?\s*(.+)$", re.IGNORECASE
+)
+_HEADING_STOPWORDS = frozenset(
+    {
+        "item", "note", "part", "section", "and", "the", "a", "an", "of", "to",
+        "for", "in", "on", "by", "or", "as", "at", "is", "are", "was", "were",
+    }
+)
+_HEADING_BONUS = 0.2
+_HEADING_MIN_IDF = 2.0
 # An acquisition note is often split across adjacent physical pages.  When the
 # question has acquisition intent and a candidate page carries an acquisition
 # heading, a small prior for its immediate next page keeps the continuation in
@@ -436,6 +454,22 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
             )
             texts.setdefault(key, hit.text)
             scores[key] = scores.get(key, 0.0) + weight / (_RRF_K + rank)
+    question_terms = frozenset(
+        term
+        for term in analyze_text(question).split()
+        if len(term) >= 5 and term not in _HEADING_STOPWORDS
+    )
+    if question_terms:
+        for key in scores:
+            matched = _heading_terms(texts.get(key, ""), analyze_text) & question_terms
+            if not matched:
+                continue
+            # Only a distinctive heading term may lift a page.  A common word such
+            # as "income" heads a page on nearly every statement, so a match on it
+            # says nothing about the question; a rare word such as "legal" points
+            # at one section and is a real signal.
+            if max(weights.get(term, 0.0) for term in matched) >= _HEADING_MIN_IDF:
+                scores[key] += _HEADING_BONUS
     intents = _statement_intents(question)
     if intents:
         markers = tuple(marker for intent in intents for marker in _STATEMENT_MARKERS[intent])
@@ -488,6 +522,21 @@ async def search_pdf_pages(memory, question: str, limit: int = 10) -> tuple:
         seen.add(identity)
         selected.append(citation)
     return tuple(selected)
+
+
+def _heading_terms(text: str, analyze_text) -> frozenset[str]:
+    """Return the terms of the section headings that one page carries."""
+
+    found: set[str] = set()
+    for line in text.split("\n"):
+        match = _HEADING_PATTERN.match(line.strip())
+        if match is None:
+            continue
+        for term in analyze_text(match.group(1)).split():
+            if term in _HEADING_STOPWORDS or term.isdigit() or len(term) < 4:
+                continue
+            found.add(term)
+    return frozenset(found)
 
 
 def _statement_intents(question: str) -> tuple[str, ...]:
