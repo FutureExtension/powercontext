@@ -720,4 +720,4 @@ flush status: completed | processed: 1
 - PowerContext 的表名、索引名、HTTP 路由、模型字段：抄自 `oceanbase/powercontext` 仓库源码（本地检出）。
 - 端口 2881、root 用户等默认连接参数：见 `赛题四「全文索引调优」的本地复现命令。
 
-OB-S:2hiQdUuquQuETr2I4saxAA
+<!-- OB-S:2hiQdUuquQuETr2I4saxAA -->
